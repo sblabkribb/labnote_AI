@@ -1,11 +1,14 @@
 #!/bin/bash
 set -e # 중간에 명령어가 실패하면 스크립트를 즉시 중단
 
-# 1. Redis 서버 설치 및 백그라운드 실행
-echo ">>> Installing and starting Redis Server..."
-apt-get update && apt-get install -y redis-server
-redis-server --daemonize yes
-echo ">>> Redis Server started."
+# 1. Redis Stack 서버 설치 및 백그라운드 실행 
+echo ">>> Installing and starting Redis Stack Server..."
+curl -fsSL https://packages.redis.io/gpg | gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/redis.list
+apt-get update
+apt-get install -y redis-stack-server
+redis-stack-server --daemonize yes
+echo ">>> Redis Stack Server started."
 
 # 2. Ollama 설치 및 백그라운드 실행
 echo ">>> Installing and starting Ollama..."
@@ -23,7 +26,7 @@ echo ">>> Model download complete."
 # 4. VESSL 서버 내부에 Modelfile 동적 생성
 echo ">>> Creating Modelfile for BioMistral..."
 cat <<'EOF' > /models/Modelfile
-FROM /models/biomistral-7b.Q4_K_M.gguf
+FROM /models/biomistral-b-q4_k_m.gguf
 TEMPLATE """[INST] {{ .Prompt }} [/INST]"""
 SYSTEM """You are a world-class AI assistant for biomedical researchers. Your task is to generate accurate, professional, and reproducible lab notes based on the provided scientific context (SOPs). You must strictly adhere to the requested Markdown format. NEVER invent information. If the context is insufficient, state that clearly."""
 PARAMETER temperature 0.1
@@ -48,6 +51,6 @@ cd labnote-ai-backend
 pip install -r requirements.txt
 echo ">>> Backend dependencies installed."
 
-# 8. FastAPI 서버 실행 (이 명령이 컨테이너를 계속 실행 상태로 유지합니다)
+# 8. FastAPI 서버 실행
 echo ">>> Starting Uvicorn server on port 8000..."
 uvicorn main:app --host 0.0.0.0 --port 8000

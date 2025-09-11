@@ -44,7 +44,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 
             try {
-                const response = await fetch('https://run-execution-1dorfxqbb6kk-run-exec-8000.seoul.oracle-cluster.vessl.ai/generate_labnote', {
+                const response = await fetch('https://run-execution-qgvn5imotwt8-run-exec-8000.seoul.oracle-cluster.vessl.ai/generate_labnote', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ query: userInput }),
