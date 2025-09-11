@@ -1,4 +1,4 @@
-FROM ./biollama3-70bf
+FROM ./biollama3-70b.gguf
 
 TEMPLATE """[INST] {{ .Prompt }} [/INST]"""
 
