@@ -2,7 +2,7 @@
   "name": "labnote-ai-assistant",
   "displayName": "LabNote AI Assistant",
   "description": "An AI assistant to help with writing lab notes in VS Code.",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "publisher": "BiofoundryLabs",
   "engines": {
     "vscode": "^1.85.0"
@@ -11,14 +11,19 @@
     "Other"
   ],
   "activationEvents": [
-    "onCommand:labnote.ai.generate"
+    "onCommand:labnote.ai.generate",
+    "onCommand:labnote.ai.chat"
   ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
       {
         "command": "labnote.ai.generate",
-        "title": "LabNote AI: Generate Note"
+        "title": "LabNote AI: 연구노트 생성"
+      },
+      {
+        "command": "labnote.ai.chat",
+        "title": "LabNote AI: 일반 대화 시작"
       }
     ],
     "configuration": {
@@ -26,8 +31,8 @@
       "properties": {
         "labnote.ai.backendUrl": {
           "type": "string",
-          "default": "https://run-execution-oyi1zgw760rb-run-exec-8000.seoul.oracle-cluster.vessl.ai/generate_labnote",
-          "description": "The URL of the LabNote AI backend server."
+          "default": "[http://127.0.0.1:8000](http://127.0.0.1:8000)",
+          "description": "The base URL of the LabNote AI backend server (e.g., [http://127.0.0.1:8000](http://127.0.0.1:8000))."
         }
       }
     }
