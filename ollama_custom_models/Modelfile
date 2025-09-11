@@ -1,4 +1,4 @@
-FROM ./biomistral-7b.Q4_K_M.gguf
+FROM ./biollama3-70bf
 
 TEMPLATE """[INST] {{ .Prompt }} [/INST]"""
 
