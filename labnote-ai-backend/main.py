@@ -1,9 +1,10 @@
 import os
 import logging
 import datetime
+import uuid
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Dict
 import ollama
 from dotenv import load_dotenv
 
@@ -18,13 +19,17 @@ logger = logging.getLogger(__name__)
 # FastAPI 앱 초기화
 app = FastAPI(
     title="LabNote AI Assistant Backend",
-    version="2.1.0",
+    version="2.2.0",
     description="A versatile AI server for generating structured lab notes and providing general chat assistance for biomedical research."
 )
+
+# --- 인메모리 대화 기록 저장소 ---
+conversation_histories: Dict[str, List[Dict[str, str]]] = {}
 
 # --- Pydantic 모델 정의 ---
 class QueryRequest(BaseModel):
     query: str
+    conversation_id: Optional[str] = None
 
 class LabNoteResponse(BaseModel):
     response: str
@@ -32,6 +37,7 @@ class LabNoteResponse(BaseModel):
 
 class ChatResponse(BaseModel):
     response: str
+    conversation_id: str
 
 # --- 워크플로우 및 단위 작업 가이드 (상수) ---
 # 사용자가 제공한 최신 상세 목록으로 업데이트되었습니다.
@@ -269,7 +275,7 @@ Based on all the information provided above, generate the complete lab note now.
                 {'role': 'system', 'content': system_prompt},
                 {'role': 'user', 'content': user_prompt}
             ],
-            options={'temperature': 0.1, 'top_p': 0.9}
+            options={'temperature': 0.4, 'top_p': 0.9}
         )
         generated_text = ollama_response['message']['content'].strip()
         logger.info("Successfully received and processed lab note response from Ollama.")
@@ -284,35 +290,60 @@ Based on all the information provided above, generate the complete lab note now.
 async def chat(request: QueryRequest):
     """
     (General Chat) RAG 없이 사용자의 질문을 LLM에 직접 전달하여 자유로운 답변을 생성합니다.
+    대화 기록을 관리하여 맥락을 유지합니다.
     """
     try:
-        logger.info(f"Received chat query: '{request.query}'")
+        logger.info(f"Received chat query: '{request.query}' for conversation_id: {request.conversation_id}")
 
-        # 시스템 프롬프트 (챗봇의 역할 정의)
-        system_prompt = "You are a helpful and knowledgeable AI assistant specializing in biotechnology and life sciences. Answer the user's questions clearly and concisely."
+        conversation_id = request.conversation_id
+        
+        # 1. 대화 ID가 없으면 새로 생성
+        if not conversation_id or conversation_id not in conversation_histories:
+            conversation_id = str(uuid.uuid4())
+            logger.info(f"Starting new conversation with ID: {conversation_id}")
+            # 새 대화 시작 시 시스템 프롬프트 추가
+            system_prompt = "You are a helpful and knowledgeable AI assistant specializing in biotechnology and life sciences. Answer the user's questions clearly and concisely."
+            conversation_histories[conversation_id] = [{"role": "system", "content": system_prompt}]
 
-        # Ollama API 호출
-        logger.info("Sending request to Ollama for chat...")
+        # 2. 현재 사용자 메시지를 대화 기록에 추가
+        conversation_histories[conversation_id].append({"role": "user", "content": request.query})
+
+        # 3. Ollama API 호출
+        logger.info(f"Sending request to Ollama for chat (conversation_id: {conversation_id})...")
         llm_model_name = os.getenv("LLM_MODEL", "biomistral")
+        
         ollama_response = ollama.chat(
             model=llm_model_name,
-            messages=[
-                {'role': 'system', 'content': system_prompt},
-                {'role': 'user', 'content': request.query}
-            ],
-            options={'temperature': 0.7} # 대화에서는 좀 더 창의적인 답변을 위해 온도를 높입니다.
+            messages=conversation_histories[conversation_id], # 전체 대화 기록 전달
+            options={'temperature': 0.7}
         )
-        generated_text = ollama_response['message']['content'].strip()
-        logger.info("Successfully received and processed chat response from Ollama.")
         
-        return ChatResponse(response=generated_text)
+        generated_text = ollama_response['message']['content'].strip()
+        
+        # 4. AI 응답을 대화 기록에 추가
+        conversation_histories[conversation_id].append({"role": "assistant", "content": generated_text})
+        
+        logger.info(f"Successfully processed chat response for conversation_id: {conversation_id}")
+        
+        return ChatResponse(response=generated_text, conversation_id=conversation_id)
 
     except Exception as e:
         logger.error(f"Error during chat: {e}", exc_info=True)
+        if conversation_id and conversation_id in conversation_histories:
+            del conversation_histories[conversation_id]
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/clear_history/{conversation_id}", summary="Clear Conversation History")
+def clear_history(conversation_id: str):
+    """특정 대화 ID의 기록을 삭제합니다."""
+    if conversation_id in conversation_histories:
+        del conversation_histories[conversation_id]
+        logger.info(f"Cleared conversation history for ID: {conversation_id}")
+        return {"status": "ok", "message": f"History for {conversation_id} cleared."}
+    else:
+        raise HTTPException(status_code=404, detail="Conversation ID not found.")
 
 @app.get("/", summary="Health Check")
 def health_check():
     """API 서버가 실행 중인지 확인하는 상태 체크 엔드포인트입니다."""
-    return {"status": "ok", "version": "2.1.0"}
-
+    return {"status": "ok", "version": "2.2.0"}
