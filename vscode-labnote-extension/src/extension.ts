@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import * as https from 'https'; // https 모듈을 임포트합니다.
+
 // node-fetch v2는 CommonJS 모듈이므로 require 구문을 사용하는 것이 가장 안정적입니다.
 const fetch = require('node-fetch');
 
@@ -7,6 +9,11 @@ interface ApiResponse {
     response: string;
     sources?: string[];
 }
+
+// 만료된 인증서를 무시하는 에이전트를 생성합니다 (개발/테스트용).
+const httpsAgent = new https.Agent({
+    rejectUnauthorized: false,
+});
 
 export function activate(context: vscode.ExtensionContext) {
 
@@ -44,10 +51,14 @@ export function activate(context: vscode.ExtensionContext) {
 
 
             try {
-                const response = await fetch('https://run-execution-qgvn5imotwt8-run-exec-8000.seoul.oracle-cluster.vessl.ai/generate_labnote', {
+                const backendUrl = 'https://run-execution-oyi1zgw760rb-run-exec-8000.seoul.oracle-cluster.vessl.ai/generate_labnote';
+                
+                const response = await fetch(backendUrl, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ query: userInput }),
+                    // **수정**: 생성한 httpsAgent를 추가하여 인증서 오류를 무시합니다.
+                    agent: httpsAgent,
                     // **개선점**: 긴 응답을 대비하여 타임아웃을 넉넉하게 설정합니다.
                     timeout: 60000 // 60초
                 });
@@ -97,4 +108,3 @@ export function activate(context: vscode.ExtensionContext) {
 
 // 확장 프로그램이 비활성화될 때 호출됩니다.
 export function deactivate() {}
-
