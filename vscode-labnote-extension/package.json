@@ -1,0 +1,53 @@
+{
+  "name": "labnote-ai-assistant",
+  "displayName": "LabNote AI Assistant",
+  "description": "An AI assistant to help with writing lab notes in VS Code.",
+  "version": "1.1.0",
+  "publisher": "BiofoundryLabs",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:labnote.ai.generate"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "labnote.ai.generate",
+        "title": "LabNote AI: Generate Note"
+      }
+    ],
+    "configuration": {
+      "title": "LabNote AI Assistant",
+      "properties": {
+        "labnote.ai.backendUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:8000/generate_labnote",
+          "description": "The URL of the LabNote AI backend server."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "18.x",
+    "@types/node-fetch": "^2.6.11",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^6.19.1",
+    "@typescript-eslint/parser": "^6.19.1",
+    "eslint": "^8.56.0",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "node-fetch": "^2.7.0"
+  }
+}

@@ -1,0 +1,31 @@
+# Gitignore for Labnote AI Assistant Project
+
+# Python backend specific
+labnote-ai-backend/venv/
+**/__pycache__/
+labnote-ai-backend/*.pyc
+
+# Node.js / VS Code extension specific
+vscode-labnote-extension/node_modules/
+vscode-labnote-extension/out/
+vscode-labnote-extension/*.vsix
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Docker data volumes
+# 이 폴더들은 컨테이너가 데이터를 저장하는 곳이므로 git에 포함하지 않습니다.
+ollama_data/
+redis_data/
+
+# Large Language Model Files
+# Modelfile은 git에 포함하되, 수 GB에 달하는 실제 모델 파일은 포함하지 않습니다.
+# README의 안내에 따라 사용자가 직접 다운로드해야 합니다.
+ollama_custom_models/*.gguf
+
+# Operating System and IDE specific files
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
