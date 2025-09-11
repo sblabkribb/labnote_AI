@@ -34,17 +34,21 @@ while true; do
     sleep 5
 done
 
-# --- [모델 업그레이드: Llama3-OpenBioLLM-8B Full Precision (FP16)] ---
-# 3. Hugging Face Hub에서 Llama3-OpenBioLLM-8B FP16 GGUF 모델 다운로드
-echo ">>> Downloading Llama3-OpenBioLLM-8B Full Precision (FP16) model... (This will be ~16.1GB)"
+# --- [모델 업그레이드: OpenBioLLM-Llama3-70B Q8_0] ---
+# 3. Hugging Face Hub에서 OpenBioLLM-Llama3-70B Q8_0 GGUF 모델 다운로드
+echo ">>> Downloading OpenBioLLM-Llama3-70B Q8_0 model... (This will be ~75.1GB)"
 mkdir -p /models
-# TheBloke/Llama3-OpenBioLLM-8B-GGUF 저장소의 F16 (무손실) 버전을 다운로드합니다.
-huggingface-cli download TheBloke/Llama3-OpenBioLLM-8B-GGUF llama3-openbiollm-8b.F16.gguf --local-dir /models --local-dir-use-symlinks False
 
-# 4. Llama3-OpenBioLLM-8B FP16을 위한 Modelfile 동적 생성
-echo ">>> Creating Modelfile for Llama3-OpenBioLLM-8B FP16..."
+# mradermacher/OpenBioLLM-Llama3-70B-GGUF 저장소의 Q8_0 버전을 다운로드합니다.
+# 이 모델은 2개의 파트로 나뉘어 있으므로, 두 파일 모두 다운로드해야 합니다.
+huggingface-cli download mradermacher/OpenBioLLM-Llama3-70B-GGUF OpenBioLLM-Llama3-70B.Q8_0.gguf.part1of2 --local-dir /models --local-dir-use-symlinks False
+huggingface-cli download mradermacher/OpenBioLLM-Llama3-70B-GGUF OpenBioLLM-Llama3-70B.Q8_0.gguf.part2of2 --local-dir /models --local-dir-use-symlinks False
+
+# 4. OpenBioLLM-Llama3-70B Q8_0을 위한 Modelfile 동적 생성
+echo ">>> Creating Modelfile for OpenBioLLM-Llama3-70B Q8_0..."
 cat <<'EOF' > /models/Modelfile
-FROM /models/Llama3-OpenBioLLM-8B.F16.gguf
+# FROM 절에는 첫 번째 파트의 파일명을 지정합니다. Ollama가 자동으로 두 번째 파트를 찾아 결합합니다.
+FROM /models/OpenBioLLM-Llama3-70B.Q8_0.gguf.part1of2
 
 # Llama 3 기반이므로, Llama 3의 프롬프트 템플릿을 사용합니다.
 TEMPLATE """<|begin_of_text|><|start_header_id|>system<|end_header_id|>
@@ -61,9 +65,9 @@ EOF
 echo ">>> Modelfile created."
 
 # 5. Ollama를 이용해 커스텀 LLM 생성 (새로운 이름으로)
-echo ">>> Creating 'biollama3-8b' model with Ollama..."
-ollama create biollama3-8b -f /models/Modelfile
-echo ">>> 'biollama3-8b' model created."
+echo ">>> Creating 'biollama3-70b' model with Ollama..."
+ollama create biollama3-70b -f /models/Modelfile
+echo ">>> 'biollama3-70b' model created."
 # --- [업그레이드 종료] ---
 
 # 6. Ollama Hub에서 임베딩 모델 다운로드 (기존과 동일)
