@@ -39,8 +39,7 @@ done
 echo ">>> Downloading Llama3-OpenBioLLM-8B Full Precision (FP16) model... (This will be ~16.1GB)"
 mkdir -p /models
 # TheBloke/Llama3-OpenBioLLM-8B-GGUF 저장소의 F16 (무손실) 버전을 다운로드합니다.
-wget https://huggingface.co/TheBloke/Llama3-OpenBioLLM-8B-GGUF/resolve/main/llama3-openbiollm-8b.F16.gguf -O /models/Llama3-OpenBioLLM-8B.F16.gguf
-echo ">>> Model download complete."
+huggingface-cli download TheBloke/Llama3-OpenBioLLM-8B-GGUF llama3-openbiollm-8b.F16.gguf --local-dir /models --local-dir-use-symlinks False
 
 # 4. Llama3-OpenBioLLM-8B FP16을 위한 Modelfile 동적 생성
 echo ">>> Creating Modelfile for Llama3-OpenBioLLM-8B FP16..."
