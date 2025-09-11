@@ -81,7 +81,7 @@ function activate(context) {
                                         _a.label = 1;
                                     case 1:
                                         _a.trys.push([1, 8, , 9]);
-                                        return [4 /*yield*/, fetch('https://run-execution-6ziwx7x33cz1-run-exec-8000.seoul.oracle-cluster.vessl.ai/generate_labnote', {
+                                        return [4 /*yield*/, fetch('https://workspace-76gkudertnk0-workspace-8000.seoul.oracle-cluster.vessl.ai/generate_labnote', {
                                                 method: 'POST',
                                                 headers: { 'Content-Type': 'application/json' },
                                                 body: JSON.stringify({ query: userInput }),

@@ -31,7 +31,7 @@
       "properties": {
         "labnote.ai.backendUrl": {
           "type": "string",
-          "default": "https://run-execution-6ziwx7x33cz1-run-exec-8000.seoul.oracle-cluster.vessl.ai",
+          "default": "https://workspace-76gkudertnk0-workspace-8000.seoul.oracle-cluster.vessl.ai",
           "description": "The base URL of the LabNote AI backend server (e.g., https://...vessl.ai)."
         }
       }

@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+
 // node-fetch v2는 CommonJS 모듈이므로 require 구문을 사용하는 것이 가장 안정적입니다.
 const fetch = require('node-fetch');
 
@@ -13,65 +14,52 @@ interface ApiResponse {
 
 export function activate(context: vscode.ExtensionContext) {
     
-    // 진단용 로그
-    console.log("--- LabNote AI Extension v1.5 (Dual Mode) ACTIVATED ---");
+    // 진단용 로그: 확장 프로그램이 최신 코드로 실행되었는지 확인합니다.
+    console.log("--- LabNote AI Extension v2.0 (Improved UX) ACTIVATED ---");
+
+    // VESSL의 만료된 인증서 문제를 해결하기 위한 전역 설정입니다.
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
     const outputChannel = vscode.window.createOutputChannel("LabNote AI");
     outputChannel.appendLine('LabNote AI extension is now active.');
-    
-    // --- [기존 기능] 연구노트 생성 ---
-    let generateDisposable = vscode.commands.registerCommand('labnote.ai.generate', async () => {
+
+    // --- 1. 연구노트 생성 명령어 등록 ---
+    const generateDisposable = vscode.commands.registerCommand('labnote.ai.generate', async () => {
         const userInput = await vscode.window.showInputBox({
             prompt: '생성할 연구노트의 내용을 입력하세요.',
-            placeHolder: '예: DH5a Transformation 프로토콜 알려줘'
+            placeHolder: '예: Level 1 Golden Gate Assembly 프로토콜'
+        });
+
+        if (!userInput) return;
+
+        // API 호출을 위한 공통 로직 실행
+        await callApi(userInput, '/generate_labnote', outputChannel, "연구노트 초안");
+    });
+
+    // --- 2. 일반 대화 명령어 등록 ---
+    const chatDisposable = vscode.commands.registerCommand('labnote.ai.chat', async () => {
+        const userInput = await vscode.window.showInputBox({
+            prompt: 'AI에게 질문할 내용을 입력하세요.',
+            placeHolder: '예: CRISPR-Cas9 시스템에 대해 설명해줘'
         });
 
         if (!userInput) return;
         
-        // 백엔드 URL 설정 가져오기
-        const config = vscode.workspace.getConfiguration('labnote.ai');
-        const baseUrl = config.get<string>('backendUrl');
-        if (!baseUrl) {
-            vscode.window.showErrorMessage("LabNote AI 백엔드 URL이 설정되지 않았습니다.");
-            return;
-        }
-        const apiUrl = `${baseUrl}/generate_labnote`;
-
-        await callApi(userInput, apiUrl, outputChannel, true);
-    });
-
-    // --- [새로운 기능] 일반 대화 ---
-    let chatDisposable = vscode.commands.registerCommand('labnote.ai.chat', async () => {
-        const userInput = await vscode.window.showInputBox({
-            prompt: 'AI에게 무엇이든 물어보세요.',
-            placeHolder: '예: E.coli의 doubling time은 얼마야?'
-        });
-
-        if (!userInput) return;
-
-        // 백엔드 URL 설정 가져오기
-        const config = vscode.workspace.getConfiguration('labnote.ai');
-        const baseUrl = config.get<string>('backendUrl');
-        if (!baseUrl) {
-            vscode.window.showErrorMessage("LabNote AI 백엔드 URL이 설정되지 않았습니다.");
-            return;
-        }
-        const apiUrl = `${baseUrl}/chat`;
-
-        await callApi(userInput, apiUrl, outputChannel, false);
+        // API 호출을 위한 공통 로직 실행
+        await callApi(userInput, '/chat', outputChannel, "AI 답변");
     });
 
     context.subscriptions.push(generateDisposable, chatDisposable);
 }
 
 /**
- * API 호출 및 결과 처리를 위한 공통 함수
- * @param query 사용자 입력
- * @param apiUrl 호출할 API의 전체 URL
- * @param outputChannel 로그를 출력할 채널
- * @param isLabnote 랩노트 생성 여부 (결과 표시 방식 결정)
+ * API 호출을 처리하고 결과를 새 문서에 표시하는 공통 함수
+ * @param userInput 사용자가 입력한 텍스트
+ * @param path API 경로 (e.g., '/generate_labnote' or '/chat')
+ * @param outputChannel VS Code 출력 채널
+ * @param resultType 결과 문서의 제목에 표시될 텍스트
  */
-async function callApi(query: string, apiUrl: string, outputChannel: vscode.OutputChannel, isLabnote: boolean) {
+async function callApi(userInput: string, path: string, outputChannel: vscode.OutputChannel, resultType: string) {
     await vscode.window.withProgress({
         location: vscode.ProgressLocation.Notification,
         title: "LabNote AI가 작동 중입니다...",
@@ -83,18 +71,24 @@ async function callApi(query: string, apiUrl: string, outputChannel: vscode.Outp
         });
 
         progress.report({ increment: 10, message: "백엔드 서버에 요청을 보냅니다..." });
-        outputChannel.appendLine(`[Request to ${apiUrl}] 사용자 쿼리: "${query}"`);
-
-        // Node.js 환경 변수를 직접 조작하여 인증서 검증을 강제로 비활성화
-        const originalRejectUnauthorized = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
-        process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+        outputChannel.appendLine(`[Request] 사용자 쿼리: "${userInput}"`);
 
         try {
-            const response = await fetch(apiUrl, {
+            // package.json의 설정에서 기본 URL을 읽어옵니다.
+            const config = vscode.workspace.getConfiguration('labnote.ai');
+            const baseUrl = config.get<string>('backendUrl');
+
+            if (!baseUrl) {
+                throw new Error("Backend URL이 설정되지 않았습니다. VS Code 설정을 확인해주세요.");
+            }
+            
+            const fullUrl = `${baseUrl}${path}`;
+            
+            const response = await fetch(fullUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ query }),
-                timeout: 180000 // 타임아웃 3분
+                body: JSON.stringify({ query: userInput }),
+                timeout: 180000 // 타임아웃을 3분으로 넉넉하게 설정
             });
             
             if (token.isCancellationRequested) return;
@@ -110,19 +104,15 @@ async function callApi(query: string, apiUrl: string, outputChannel: vscode.Outp
             if (token.isCancellationRequested) return;
             progress.report({ increment: 90, message: "결과를 표시합니다..." });
 
-            // 결과 표시: 랩노트는 새 문서에, 일반 대화는 정보 메시지 창에 표시
-            if (isLabnote) {
-                const doc = await vscode.workspace.openTextDocument({
-                    content: data.response,
-                    language: 'markdown'
-                });
-                await vscode.window.showTextDocument(doc, { preview: false });
-            } else {
-                // 긴 답변도 잘 보이도록 모달 정보 창 사용
-                await vscode.window.showInformationMessage("LabNote AI의 답변:", { modal: true, detail: data.response });
-            }
+            // --- 여기가 핵심 개선 사항 ---
+            // 챗봇 결과도 이제 복사 및 편집이 가능한 새 문서 탭에 표시됩니다.
+            const doc = await vscode.workspace.openTextDocument({
+                content: `# ${resultType}: ${userInput}\n\n---\n\n${data.response}`,
+                language: 'markdown'
+            });
+            await vscode.window.showTextDocument(doc, { preview: false });
+            // -----------------------------
 
-            // 로그 및 참고 자료 출력
             if (data.sources && data.sources.length > 0) {
                 outputChannel.appendLine(`[Response] 생성 완료. 참고 자료: ${data.sources.join(', ')}`);
             } else {
@@ -131,12 +121,9 @@ async function callApi(query: string, apiUrl: string, outputChannel: vscode.Outp
             outputChannel.show(true);
 
         } catch (error: any) {
-            vscode.window.showErrorMessage('LabNote AI 생성 중 오류가 발생했습니다. 자세한 내용은 출력 채널을 확인하세요.');
+            vscode.window.showErrorMessage('LabNote AI와 통신 중 오류가 발생했습니다. 자세한 내용은 출력 채널을 확인하세요.');
             outputChannel.appendLine(`[ERROR] ${error.message}`);
             outputChannel.show(true);
-        } finally {
-            // 요청이 끝나면 환경 변수를 원래대로 복원
-            process.env.NODE_TLS_REJECT_UNAUTHORIZED = originalRejectUnauthorized;
         }
     });
 }
