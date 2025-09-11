@@ -31,8 +31,8 @@
       "properties": {
         "labnote.ai.backendUrl": {
           "type": "string",
-          "default": "[http://127.0.0.1:8000](http://127.0.0.1:8000)",
-          "description": "The base URL of the LabNote AI backend server (e.g., [http://127.0.0.1:8000](http://127.0.0.1:8000))."
+          "default": "https://run-execution-6ziwx7x33cz1-run-exec-8000.seoul.oracle-cluster.vessl.ai",
+          "description": "The base URL of the LabNote AI backend server (e.g., https://...vessl.ai)."
         }
       }
     }
@@ -56,3 +56,4 @@
     "node-fetch": "^2.7.0"
   }
 }
+
