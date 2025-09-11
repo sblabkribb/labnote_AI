@@ -17,7 +17,7 @@
 ## 빠른 시작 가이드
 
 ### 1. 사전 준비
-- **Docker Desktop** 설치 및 실행
+- **Docker Desktop** 설치 및 실행 (기타 다른 desktop 가능)
 - **Python 3.10+** 설치
 - **Node.js 18+** 및 **npm** 설치
 - **VS Code** 설치
@@ -28,20 +28,11 @@
 ```bash
 docker-compose up -d
 ```
-### 2-1. Redis 실행
-```bash
-docker run -d \
-  --name labnote-redis \
-  -p 6379:6379 \
-  --restart unless-stopped \
-  redis/redis-stack-server:latest
-```
-
 * Redis는 `localhost:6379`에서 실행됩니다.
 * Ollama API는 `localhost:11434`에서 실행됩니다.
 
 ### 3. 커스텀 모델 등록 (Ollama)
-`ollama_custom_models/` 디렉토리에 `Modelfile`과 `biomistral-7b.Q4_K_M.gguf` 파일이 준비되어 있어야 합니다. 터미널에서 다음 명령어를 실행합니다.
+`ollama_custom_models/` 디렉토리에 `Modelfile`과 `biomistral-7b.Q4_K_M.gguf` 파일이 준비되어 있어야 합니다. 공싱에서 다운 받거나 커스텀 모델 가능 (이름만 바꿔주시면 됩니다.) 터미널에서 다음 명령어를 실행합니다.
 
 ```bash
 cd ollama_custom_models
@@ -68,7 +59,7 @@ uvicorn main:app --reload --host 127.0.0.1 --port 8000
 * 4. 새로운 VS Code 창에서 `Ctrl+Shift+P` (또는 `Cmd+Shift+P`)를 누르고 `LabNote AI: Generate Note` 명령어를 실행합니다.
 
 ## SOP 문서 추가
-새로운 실험 프로토콜을 AI가 학습하도록 하려면, `labnote-ai-backend/sops/` 디렉토리에 .txt 형식으로 파일을 추가한 후, 백엔드 서버를 재시작하면 자동으로 인덱싱됩니다.
+새로운 실험 프로토콜을 AI가 학습하도록 하려면, `labnote-ai-backend/sops/` 디렉토리에 .md 형식으로 파일을 추가한 후, 백엔드 서버를 재시작하면 자동으로 인덱싱됩니다.
 
 
 ## 
