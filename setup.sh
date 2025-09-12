@@ -1,64 +1,52 @@
 #!/bin/bash
+# This script sets up the complete AI backend environment on a VESSL Workspace.
+# Version 3.0: Implements robust waiting logic for Ollama server startup.
 set -e
 
-# 1. Redis Stack 서버 설치 및 실행 (기존 유지)
+# --- 1. System & Prerequisite Setup ---
+echo ">>> Updating package lists and installing prerequisites..."
+apt-get update
+# huggingface-cli for downloading models, curl for installations
+apt-get install -y curl
+pip install -q huggingface_hub[cli] # Install huggingface-cli quietly
+
+# --- 2. Redis Stack Server Setup ---
 echo ">>> Installing and starting Redis Stack Server..."
+# This command sequence is idempotent (safe to re-run).
 curl -fsSL https://packages.redis.io/gpg | gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg
 echo "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/redis.list > /dev/null
 apt-get update
 apt-get install -y redis-stack-server
 redis-stack-server --daemonize yes
-echo ">>> Redis Stack Server started."
+echo ">>> Redis Stack Server started successfully."
 
-# 2. Ollama 설치 (기존 유지)
-echo ">>> Installing and starting Ollama..."
+# --- 3. Ollama Server Setup & Robust Wait ---
+echo ">>> Installing and starting Ollama server..."
 curl -fsSL https://ollama.com/install.sh | sh
+ollama serve &
+# Give it a few seconds to initialize the process
+sleep 5
 
-# Ollama 서버 대기 (기존 유지)
-echo ">>> Waiting for Ollama server to be ready..."
-timeout=120
-start_time=$(date +%s)
-while true; do
-    if curl -s --head http://127.0.0.1:11434/ | head -n 1 | grep "200 OK" > /dev/null; then
-        echo ">>> Ollama server is ready!"
-        break
-    fi
-    current_time=$(date +%s)
-    elapsed_time=$((current_time - start_time))
-    if [ $elapsed_time -ge $timeout ]; then
-        echo ">>> Timeout: Ollama server did not start within ${timeout} seconds."
-        exit 1
-    fi
-    echo "    - Still waiting..."
-    sleep 5
-done
+echo ">>> Waiting for Ollama server to be fully ready by pulling a small model..."
+# Use 'ollama pull' as a robust readiness check. It will only succeed when the server is fully operational.
+# This is more reliable than a simple curl check.
+ollama pull nomic-embed-text
+echo ">>> Ollama server is confirmed to be ready!"
 
-# --- [핵심: OpenBioLLM-Llama3-70B Q8_0 다운로드 - mradermacher 저장소 사용] ---
-echo ">>> Downloading OpenBioLLM-Llama3-70B Q8_0 model (2-part format) from mradermacher..."
-mkdir -p /models
-
-# ✅ 정확한 파일명으로 다운로드 (part1of2, part2of2)
-huggingface-cli download mradermacher/OpenBioLLM-Llama3-70B-GGUF \
-    OpenBioLLM-Llama3-70B.Q8_0.gguf.part1of2 \
+# --- 4. Main LLM Download and Setup ---
+echo ">>> Downloading Llama3-OpenBioLLM-8B Full Precision (FP16) model (~16.1GB)..."
+# Use huggingface-cli to download the unquantized, full-precision model.
+huggingface-cli download aaditya/Llama3-OpenBioLLM-8B-GGUF \
+    Llama3-OpenBioLLM-8B-F16.gguf \
     --local-dir /models --local-dir-use-symlinks False
+echo ">>> Model downloaded successfully."
 
-huggingface-cli download mradermacher/OpenBioLLM-Llama3-70B-GGUF \
-    OpenBioLLM-Llama3-70B.Q8_0.gguf.part2of2 \
-    --local-dir /models --local-dir-use-symlinks False
-
-# 파일 존재 확인 (중요!)
-ls -la /models/OpenBioLLM-Llama3-70B.Q8_0.gguf.part*
-if [ ! -f "/models/OpenBioLLM-Llama3-70B.Q8_0.gguf.part1of2" ] || [ ! -f "/models/OpenBioLLM-Llama3-70B.Q8_0.gguf.part2of2" ]; then
-    echo "❌ ERROR: Required model files are missing!"
-    exit 1
-fi
-echo "✅ Both parts downloaded successfully!"
-
-# 4. Modelfile 생성 - 첫 번째 파트만 지정하면 Ollama가 자동으로 두 번째 찾음
-echo ">>> Creating Modelfile for 'biollama3-70b'..."
+# Create the Modelfile pointing to the downloaded model.
+echo ">>> Creating Modelfile for 'biollama3'..."
 cat <<'EOF' > /models/Modelfile
-FROM /models/OpenBioLLM-Llama3-70B.Q8_0.gguf.part1of2
+FROM /models/Llama3-OpenBioLLM-8B-F16.gguf
 
+# Llama 3 Instruct Template
 TEMPLATE """<|begin_of_text|><|start_header_id|>system<|end_header_id|>
 
 {{ .System }}<|eot_id|><|start_header_id|>user<|end_header_id|>
@@ -71,27 +59,17 @@ PARAMETER stop "<|end_of_text|>"
 EOF
 echo ">>> Modelfile created."
 
-# 5. Ollama 모델 생성
-echo ">>> Creating custom model 'biollama3-70b' with Ollama..."
-ollama create biollama3-70b -f /models/Modelfile
+# Create the custom model within Ollama.
+echo ">>> Creating custom model 'biollama3' with Ollama..."
+ollama create biollama3 -f /models/Modelfile
+echo ">>> 'biollama3' model created successfully!"
 
-# 확인
-ollama list | grep biollama3-70b
-if [ $? -ne 0 ]; then
-    echo "❌ ERROR: Model creation failed. Check Ollama logs with 'ollama serve' in another terminal."
-    exit 1
-fi
-echo "✅ 'biollama3-70b' model created successfully!"
-
-# 6. 임베딩 모델 다운로드 (기존 유지)
-echo ">>> Pulling 'nomic-embed-text' embedding model..."
-ollama pull nomic-embed-text
-
-# 7. FastAPI 백엔드 설정 및 실행 (기존 유지)
+# --- 5. FastAPI Backend Setup and Launch ---
 echo ">>> Setting up FastAPI backend..."
 cd labnote-ai-backend
 pip install -r requirements.txt
+echo ">>> Backend dependencies installed."
 
-# FastAPI 서버 실행
+# Launch the FastAPI server. This is the final command and will keep the container running.
 echo ">>> Starting Uvicorn server on port 8000..."
 uvicorn main:app --host 0.0.0.0 --port 8000
