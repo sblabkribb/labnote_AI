@@ -1,6 +1,6 @@
 #!/bin/bash
 # This script sets up the complete AI backend environment on a VESSL Workspace.
-# Version 4.0: Idempotent and robust setup with clear logging.
+# Version 4.2: Corrected Hugging Face repository ID to 'mradermacher'.
 set -e
 
 # --- 1. System & Prerequisite Setup ---
@@ -39,25 +39,26 @@ if ! pgrep -f "ollama serve" > /dev/null; then
 fi
 
 echo "    - Verifying and pulling 'nomic-embed-text' model (used for readiness check)..."
-ollama pull nomic-embed-text > /dev/null # This both installs the model and confirms the server is ready.
+ollama pull nomic-embed-text > /dev/null
 echo ">>> Ollama server and embedding model are ready."
 
 # --- 4. Main LLM Download and Setup ---
 MODEL_NAME="biollama3"
-MODEL_FILE_PATH="/models/Llama3-OpenBioLLM-8B-F16.gguf"
+MODEL_FILE_PATH="/models/Llama3-OpenBioLLM-8B.f16.gguf"
 echo ">>> (Step 4/5) Setting up main LLM: ${MODEL_NAME}..."
 
 if ! ollama list | grep -q "$MODEL_NAME"; then
     if [ ! -f "$MODEL_FILE_PATH" ]; then
         echo "    - Main model file not found. Downloading (~16GB)..."
-        huggingface-cli download aaditya/Llama3-OpenBioLLM-8B-GGUF \
-            Llama3-OpenBioLLM-8B-F16.gguf \
+        # ⬇️⬇️⬇️ 바로 이 부분! 저장소 주소를 'mradermacher'로 수정했습니다. ⬇️⬇️⬇️
+        huggingface-cli download mradermacher/Llama3-OpenBioLLM-8B-GGUF \
+            Llama3-OpenBioLLM-8B.f16.gguf \
             --local-dir /models --local-dir-use-symlinks False
     fi
     
     echo "    - Creating Modelfile for '${MODEL_NAME}'..."
     cat <<'EOF' > /models/Modelfile
-FROM /models/Llama3-OpenBioLLM-8B-F16.gguf
+FROM /models/Llama3-OpenBioLLM-8B.f16.gguf
 TEMPLATE """<|begin_of_text|><|start_header_id|>system<|end_header_id|>
 
 {{ .System }}<|eot_id|><|start_header_id|>user<|end_header_id|>
