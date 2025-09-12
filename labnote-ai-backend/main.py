@@ -208,7 +208,7 @@ async def lifespan(app: FastAPI):
     if not redis_url:
         raise ValueError("REDIS_URL environment variable is not set.")
     logger.info(f"Creating Redis connection pool for {redis_url}")
-    redis_pool = redis.asyncio.ConnectionPool.from_url(redis_url, decode_responses=True)
+    redis_pool = redis.ConnectionPool.from_url(redis_url, decode_responses=True)
     yield
     logger.info("Closing Redis connection pool.")
     if redis_pool:

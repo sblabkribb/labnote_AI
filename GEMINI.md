@@ -50,92 +50,26 @@ graph TD
 | **Phase 4** | 최종 UX 개선 및 배포 준비 | ✅ 완료 | VSCode 확장의 정규식 버그 수정, Webview UI 개선, 배포 자동화 스크립트 완성. |
 | **Phase 5** | 서버 안정화 및 최적화 | 🚀 다음 단계 | 백엔드 성능·안정성 최적화를 통해 API 응답 속도 및 장애 대응력을 극대화합니다. |
 
----
+#### **Phase 6: 최종 UX 개선 및 배포 (Final Step 🚀)**
 
-### 4\.: 서버 안정화 및 최적화 (Next Step)
+**목표**: 현재의 `QuickPick` 기반 UI를 넘어, 더 풍부한 정보를 제공하고 사용 편의성을 극대화하는 UI를 도입하여 프로젝트를 완성합니다.
 
-### 목표
-- **API 응답 성능 최적화**
-- **에러 처리 명확화**
-- **반복적 리소스 소비 제거**
-- **Redis 연결 안정성 강화**
+1.  **VSCode Webview를 이용한 옵션 표시 UI 개선 (`extension.ts`)**
+    * **Action**: 현재 텍스트 미리보기만 가능한 `QuickPick` 메뉴를 **Webview UI**로 업그레이드합니다.
+    * **구현**:
+        1.  `/populate_note` API 호출 후, 반환된 옵션을 Webview 내에 각각의 카드(Card) 형태로 표시합니다.
+        2.  각 카드에는 명확한 제목을 붙여줍니다. 
+        3.  사용자가 Webview 내에서 카드를 선택하고 '적용' 버튼을 누르면, 해당 내용이 에디터에 삽입되고 DPO 데이터가 기록되도록 로직을 연결합니다. 이는 사용자에게 훨씬 직관적인 경험을 제공할 것입니다.
 
----
+1.  **DPO 모델 배포 자동화 스크립트 작성 (`scripts/deploy_model.sh`)**
+    * **Action**: DPO 학습 완료 후, 수동으로 진행해야 하는 GGUF 변환 및 Ollama 등록 과정을 자동화하는 셸 스크립트를 작성합니다.
+    * **구현**:
+        1.  `run_dpo_training.py`가 완료되면, 이 스크립트는 `llama.cpp`를 사용하여 학습된 모델을 GGUF로 변환합니다.
+        2.  GGUF 파일을 기반으로 새로운 `Modelfile`을 동적으로 생성합니다.
+        3.  `ollama create biollama3:v2 -f new_modelfile` 명령을 실행하여 새 모델을 Ollama에 등록합니다.
+        4.  `.env` 파일의 `LLM_MODEL`을 새 버전으로 자동 업데이트하는 옵션을 제공합니다.
 
-### ✅ Action Item 1: 에러 처리 강화 (`main.py`)
+2.  **최종 문서화 및 정리 (`README.md`)**
+    * **Action**: 새로운 기능(섹션 채우기, DPO)에 대한 사용법을 `README.md`에 추가하고, 전체 프로젝트 구조와 실행 방법을 최신 상태로 업데이트합니다.
 
-#### 문제
-`/record_preference` 엔드포인트에서 예외 발생 시 `pass`로 조용히 무시되어 클라이언트에 오류 정보가 전달되지 않음.
-
-#### 해결 방안
-특정 예외(`RedisConnectionError`, etc.)를 명확히 캐치하고, HTTP 500 응답과 상세 메시지를 클라이언트에 반환.
-
-#### `gemini.cli` 명령어
-```bash
-gemini modify labnote-ai-backend/main.py \
-  --prompt "In the /record_preference endpoint, refactor the try...except block. Instead of 'pass' on exceptions like Redis connection errors, catch specific exceptions and raise an HTTPException with a 500 status code and a clear error message for the client."
-```
-
----
-
-### ✅ Action Item 2: 정규식 사전 컴파일 성능 최적화 (`main.py`)
-
-#### 문제
-`/record_preference` 내에서 매 요청마다 `re.compile()` 호출 → 불필요한 CPU 부하.
-
-#### 해결 방안
-정규식 패턴 `uo_block_pattern`을 **모듈 레벨**에서 한 번만 컴파일하고 재사용.
-
-#### `gemini.cli` 명령어
-```bash
-gemini modify labnote-ai-backend/main.py \
-  --prompt "Optimize performance by pre-compiling the regex pattern 'uo_block_pattern' used in the /record_preference endpoint. Move the re.compile() call to the module's top level so it is compiled only once when the application starts."
-```
-
----
-
-### ✅ Action Item 3: 데이터 사전 처리 최적화 (`main.py`)
-
-#### 문제
-매 요청마다 `UNIT_OPERATION_GUIDE_DATA`를 파싱해 `all_uos` 딕셔너리 생성 → 비효율적.
-
-#### 해결 방안
-애플리케이션 시작 시 **한 번만 파싱**하여 전역 변수 `ALL_UOS_DATA`로 저장, 이후 모든 요청에서 재사용.
-
-#### `gemini.cli` 명령어
-```bash
-gemini modify labnote-ai-backend/main.py \
-  --prompt "To improve performance, pre-process the UNIT_OPERATION_GUIDE_DATA at application startup. Create a global dictionary 'ALL_UOS_DATA' at the module level by parsing the guide data once. Then, refactor the /record_preference endpoint to use this pre-computed dictionary instead of parsing it on every request."
-```
-
----
-
-### 🔧 Action Item 4: Redis 연결 관리 개선 (선택적 심화 과제)
-
-#### 문제
-매 요청마다 새 Redis 연결 생성 → 연결 오버헤드 및 리소스 누수 가능성.
-
-#### 해결 방안
-FastAPI의 `lifespan` 이벤트를 활용해 **연결 풀(Connection Pool)** 을 애플리케이션 생명주기 동안 유지.
-
-- 앱 시작 시 연결 풀 생성
-- 앱 종료 시 정상 닫힘
-- `/record_preference`는 풀에서 연결을 획득하여 사용
-
-#### `gemini.cli` 명령어
-```bash
-gemini modify labnote-ai-backend/main.py \
-  --prompt "For more robust connection management, implement a Redis connection pool using FastAPI's lifespan context manager. Create the connection pool when the app starts up and close it gracefully on shutdown. Refactor the /record_preference endpoint to get a connection from this pool."
-```
-
----
-
-## 💡 결론 및 향후 방향
-
-| 항목 | 내용 |
-|------|------|
-| **핵심 가치** | 연구자의 의사결정을 학습 데이터로 삼아, 시스템이 스스로 더 나은 파트너가 되는 **자기 진화형 AI** |
-| **기술적 우위** | LangGraph × DPO × Real-time VSCode 통합 = **연구 노트의 새로운 표준** |
-| **차세대 목표** | DPO 학습 주기 자동화 → 주간/월간 모델 업데이트 파이프라인 구축 → **자동 실험 설계 추천** 기능 연계 |
-
-> 🏁 **Phase 5 완료 후**, LabNote AI 2.0은 단순한 보조 도구가 아닌, **연구자의 사고를 확장하는 지능형 코디네이터**로 자리잡게 됩니다.
+이 마지막 단계를 완료하면, LabNote AI 2.0은 기술적으로 완성도 높은 프로젝트가 될 뿐만 아니라, 실제 연구 환경에서 매우 유용하게 사용될 수 있는 강력한 도구가 될 것입니다.

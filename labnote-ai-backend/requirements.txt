@@ -13,6 +13,7 @@ unstructured
 markdown
 tqdm
 redis==5.0.1
+langgraph
 
 # For DPO Training
 datasets
