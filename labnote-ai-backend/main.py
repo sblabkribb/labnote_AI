@@ -216,12 +216,10 @@ UNIT_OPERATION_GUIDE_DATA = """
 # --- 헬퍼 함수 ---
 
 def get_seoul_date_string():
-    """서울 시간대의 YYYY-MM-DD 문자열을 반환합니다."""
-    return datetime.now(datetime.timezone(datetime.timedelta(hours=9))).strftime('%Y-%m-%d')
+    return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9))).strftime('%Y-%m-%d')
 
 def create_unit_operation_template(uo_id, uo_name, experimenter):
-    """지정된 유닛 오퍼레이션의 비어있는 마크다운 템플릿을 생성합니다."""
-    formatted_datetime = datetime.now(datetime.timezone(datetime.timedelta(hours=9))).strftime('%Y-%m-%d %H:%M')
+    formatted_datetime = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9))).strftime('%Y-%m-%d %H:%M')
     return f"""
 ------------------------------------------------------------------------
 ### [{uo_id} {uo_name}]
