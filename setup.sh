@@ -53,9 +53,9 @@ echo ">>> (Step 4/6) Setting up main LLMs for Inference and DPO..."
 DPO_MODEL_PATH="/models/hf/Llama3-OpenBioLLM-8B"
 echo "    - Checking for DPO base model at ${DPO_MODEL_PATH}..."
 if [ ! -d "${DPO_MODEL_PATH}" ]; then
-    echo "    - DPO base model not found. Downloading from Hugging Face (BioMistral/Llama3-OpenBioLLM-8B)..."
-    # [수정됨] unsloth -> BioMistral/Llama3-OpenBioLLM-8B
-    huggingface-cli download BioMistral/Llama3-OpenBioLLM-8B --local-dir "${DPO_MODEL_PATH}" --local-dir-use-symlinks False
+    echo "    - DPO base model not found. Downloading from Hugging Face (aaditya/Llama3-OpenBioLLM-8B)..."
+    # Updated: Corrected repo_id from BioMistral to aaditya
+    huggingface-cli download aaditya/Llama3-OpenBioLLM-8B --local-dir "${DPO_MODEL_PATH}" --local-dir-use-symlinks False
     echo "    - DPO base model downloaded."
 else
     echo "    - DPO base model already exists."
