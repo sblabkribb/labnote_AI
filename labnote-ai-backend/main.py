@@ -1,14 +1,15 @@
 import os
 import logging
 import datetime
+import uuid
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import Optional, List
-import ollama
-from dotenv import load_dotenv
+from typing import Optional, List, Dict
 
 # RAG 파이프라인 싱글턴 인스턴스를 임포트합니다.
 from rag_pipeline import rag_pipeline
+import ollama
+from dotenv import load_dotenv
 
 # .env 파일 로드 및 로깅 설정
 load_dotenv()
@@ -18,13 +19,17 @@ logger = logging.getLogger(__name__)
 # FastAPI 앱 초기화
 app = FastAPI(
     title="LabNote AI Assistant Backend",
-    version="2.2.0",
+    version="2.3.0", # 버전 업데이트
     description="A versatile AI server for generating structured lab notes and providing general chat assistance for biomedical research."
 )
 
-# --- Pydantic 모델 정의 ---
+# --- 인메모리 대화 기록 저장소 (재도입) ---
+conversation_histories: Dict[str, List[Dict[str, str]]] = {}
+
+# --- Pydantic 모델 정의 (대화 ID 포함) ---
 class QueryRequest(BaseModel):
     query: str
+    conversation_id: Optional[str] = None
 
 class LabNoteResponse(BaseModel):
     response: str
@@ -32,9 +37,9 @@ class LabNoteResponse(BaseModel):
 
 class ChatResponse(BaseModel):
     response: str
+    conversation_id: str
 
-# --- 워크플로우 및 단위 작업 가이드 (상수) ---
-# 사용자가 제공한 최신 상세 목록으로 업데이트되었습니다.
+# --- 워크플로우 및 단위 작업 가이드 (기존과 동일) ---
 WORKFLOW_GUIDE_DATA = """
 # Workflows Guide
 ## Design (설계)
@@ -106,7 +111,6 @@ WORKFLOW_GUIDE_DATA = """
 - WL090: Fermentation Optimization Model Development (발효 데이터를 기반으로 목표 화합물 생산 최적 조건 탐색)
 - WL100: Foundation Model Development (대규모 서열 데이터셋을 이용한 파운데이션 모델 훈련)
 """
-
 UNIT_OPERATION_GUIDE_DATA = """
 # Unit Operations Guide
 ## Hardware (UHW)
@@ -195,62 +199,56 @@ UNIT_OPERATION_GUIDE_DATA = """
 - USW330: Well Plate Mapping (고처리량 스크리닝을 위한 웰 플레이트 매핑 소프트웨어)
 - USW340: Computation (일반적인 데이터 수집, 전처리, 분석 과정)
 """
-
 # --- API 엔드포인트 ---
 
 @app.post("/generate_labnote", response_model=LabNoteResponse)
 async def generate_labnote(request: QueryRequest):
     """
-    (RAG + Template) 사용자의 쿼리를 기반으로 관련 SOP를 검색하고,
+    (RAG + Template) 사용자의 쿼리를 기반으로 관련 SOP를 검색하고, 
     체계적인 프롬프트를 사용하여 구조화된 연구 노트를 생성합니다.
     """
     try:
         logger.info(f"Received lab note generation query: '{request.query}'")
 
-        # 1. 컨텍스트 검색 (RAG)
         retrieved_docs = rag_pipeline.retrieve_context(request.query)
         formatted_context = rag_pipeline.format_context_for_prompt(retrieved_docs)
         sources = list(set([doc.metadata.get('source', 'Unknown').split('/')[-1] for doc in retrieved_docs]))
 
-        # 2. 시스템 프롬프트 (AI의 역할 및 규칙 정의)
-        system_prompt = """You are an expert AI assistant for biomedical researchers. Your mission is to generate a professional, structured lab note in Markdown format. You must strictly follow all rules and use the provided template. Do not output the rules themselves; only output the final, complete Markdown document."""
+        system_prompt = """You are a world-class expert in biomedical research creating a professional lab note in Markdown. Your goal is to generate the most helpful and accurate lab note based on the user's request and provided context."""
 
-        # 3. 사용자 프롬프트 (AI에게 제공할 정보 및 최종 지시)
         current_date = datetime.datetime.now().strftime('%Y-%m-%d')
         user_prompt = f"""
-[TASK]
-Generate a complete lab note draft for the user query: "{request.query}"
+[User Query]
+"{request.query}"
 
-[CONTEXT FROM SOPs]
+[Instructions]
+1. **Analyze Goal**: Understand the user's experimental goal from the [User Query].
+2. **Use Context**: Heavily rely on the [Reference SOPs] to draft the lab note's sections (Method, Reagents, etc.).
+3. **Find Correct IDs**: Use the [Classification Guides] to find the correct Workflow and Unit Operation codes.
+4. **Generate Directly**: Based on all information, directly generate the complete lab note using the [Output Template]. Do not add commentary. If context is irrelevant or insufficient, state that clearly in the relevant section and do not invent procedural steps.
+
+[Reference SOPs]
 {formatted_context}
 
-[CLASSIFICATION GUIDES]
+[Classification Guides]
 {WORKFLOW_GUIDE_DATA}
 {UNIT_OPERATION_GUIDE_DATA}
 
-[CRITICAL RULES]
-1. **Context Validation (Guardrail):** First, analyze the [CONTEXT]. If it's irrelevant to the query, respond ONLY with: "Error: Relevant information not found in SOPs."
-2. **Content Source:** Base the detailed content (Input, Reagent, Method, etc.) on the [CONTEXT]. Use the [CLASSIFICATION GUIDES] for correct IDs and names.
-3. **Completeness:** If the context is sparse, use your knowledge from the guides to create plausible, relevant content for any empty sections. Do not leave sections like "Method" blank.
-
-[OUTPUT TEMPLATE]
+[Output Template]
 ---
 title: "[AI Generated] {request.query}"
 experimenter: AI Assistant
 created_date: '{current_date}'
 ---
 
-## Workflow: [Concise, descriptive title based on the query and context]
+## Workflow: [Concise, descriptive title based on query and context]
 
 > A one-sentence summary of this workflow.
 
 ## 🗂️ Relevant Unit Operations
-> <!-- UNITOPERATION_LIST_START -->
-[Extract and list COMPLETE, relevant Unit Operation sections from the context here. Each section must include all its original fields.]
-> <!-- UNITOPERATION_LIST_END -->
----
+> [Extract and list the complete, relevant Unit Operation sections from the context. If no relevant operations are found, state "No relevant unit operations found in the provided SOPs.".]
+> ---
 """
-        # 4. Ollama API 호출
         logger.info("Sending request to Ollama for lab note generation...")
         llm_model_name = os.getenv("LLM_MODEL", "biollama3")
         ollama_response = ollama.chat(
@@ -259,17 +257,18 @@ created_date: '{current_date}'
                 {'role': 'system', 'content': system_prompt},
                 {'role': 'user', 'content': user_prompt}
             ],
-            options={'temperature': 0.1, 'top_p': 0.9}
+            options={'temperature': 0.2, 'top_p': 0.9}
         )
         generated_text = ollama_response['message']['content'].strip()
         logger.info("Successfully received and processed lab note response from Ollama.")
-
-        # 후처리: AI가 템플릿 마커를 출력한 경우 제거
-        if generated_text.startswith("---"):
-            parts = generated_text.split("---", 2)
-            if len(parts) > 2:
-                generated_text = "---\n" + parts[1].strip() + "\n---\n" + parts[2].strip()
-
+        
+        # 후처리 로직 강화
+        if "---" in generated_text:
+            # AI가 출력한 내용에서 마크다운 블록만 정확히 추출
+            parts = generated_text.split("---")
+            if len(parts) >= 3:
+                # YAML front matter, content, and closing ---
+                generated_text = f"---{parts[1]}---{parts[2]}".strip()
 
         return LabNoteResponse(response=generated_text, sources=sources)
 
@@ -281,35 +280,55 @@ created_date: '{current_date}'
 async def chat(request: QueryRequest):
     """
     (General Chat) RAG 없이 사용자의 질문을 LLM에 직접 전달하여 자유로운 답변을 생성합니다.
+    대화 기록을 관리하여 맥락을 유지합니다.
     """
     try:
-        logger.info(f"Received chat query: '{request.query}'")
+        logger.info(f"Received chat query: '{request.query}' for conversation_id: {request.conversation_id}")
 
-        # 시스템 프롬프트 (챗봇의 역할 정의)
-        system_prompt = "You are a helpful and knowledgeable AI assistant specializing in biotechnology and life sciences. Answer the user's questions clearly, concisely, and directly in Korean."
+        conversation_id = request.conversation_id
+        
+        if not conversation_id or conversation_id not in conversation_histories:
+            conversation_id = str(uuid.uuid4())
+            logger.info(f"Starting new conversation with ID: {conversation_id}")
+            system_prompt = "You are a helpful and knowledgeable AI assistant specializing in biotechnology and life sciences. Your primary directive is to directly and accurately answer the user's questions in Korean and follow their instructions precisely. Always fulfill the user's request."
+            conversation_histories[conversation_id] = [{"role": "system", "content": system_prompt}]
 
-        # Ollama API 호출
-        logger.info("Sending request to Ollama for chat...")
+        conversation_histories[conversation_id].append({"role": "user", "content": request.query})
+
+        logger.info(f"Sending request to Ollama for chat (conversation_id: {conversation_id})...")
         llm_model_name = os.getenv("LLM_MODEL", "biollama3")
+        
         ollama_response = ollama.chat(
             model=llm_model_name,
-            messages=[
-                {'role': 'system', 'content': system_prompt},
-                {'role': 'user', 'content': request.query}
-            ],
-            options={'temperature': 0.5}
+            messages=conversation_histories[conversation_id],
+            options={'temperature': 0.7}
         )
-        generated_text = ollama_response['message']['content'].strip()
-        logger.info("Successfully received and processed chat response from Ollama.")
         
-        return ChatResponse(response=generated_text)
+        generated_text = ollama_response['message']['content'].strip()
+        
+        conversation_histories[conversation_id].append({"role": "assistant", "content": generated_text})
+        
+        logger.info(f"Successfully processed chat response for conversation_id: {conversation_id}")
+        
+        return ChatResponse(response=generated_text, conversation_id=conversation_id)
 
     except Exception as e:
         logger.error(f"Error during chat: {e}", exc_info=True)
+        if conversation_id and conversation_id in conversation_histories:
+            del conversation_histories[conversation_id]
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/clear_history/{conversation_id}", summary="Clear Conversation History")
+def clear_history(conversation_id: str):
+    """특정 대화 ID의 기록을 삭제합니다."""
+    if conversation_id in conversation_histories:
+        del conversation_histories[conversation_id]
+        logger.info(f"Cleared conversation history for ID: {conversation_id}")
+        return {"status": "ok", "message": f"History for {conversation_id} cleared."}
+    else:
+        raise HTTPException(status_code=404, detail="Conversation ID not found.")
 
 @app.get("/", summary="Health Check")
 def health_check():
     """API 서버가 실행 중인지 확인하는 상태 체크 엔드포인트입니다."""
-    return {"status": "ok", "version": "2.2.0"}
-
+    return {"status": "ok", "version": "2.3.0"}
