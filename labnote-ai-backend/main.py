@@ -1,10 +1,9 @@
 import os
 import logging
 import datetime
-import uuid
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import Optional, List, Dict
+from typing import Optional, List
 import ollama
 from dotenv import load_dotenv
 
@@ -23,13 +22,9 @@ app = FastAPI(
     description="A versatile AI server for generating structured lab notes and providing general chat assistance for biomedical research."
 )
 
-# --- 인메모리 대화 기록 저장소 ---
-conversation_histories: Dict[str, List[Dict[str, str]]] = {}
-
 # --- Pydantic 모델 정의 ---
 class QueryRequest(BaseModel):
     query: str
-    conversation_id: Optional[str] = None
 
 class LabNoteResponse(BaseModel):
     response: str
@@ -37,7 +32,6 @@ class LabNoteResponse(BaseModel):
 
 class ChatResponse(BaseModel):
     response: str
-    conversation_id: str
 
 # --- 워크플로우 및 단위 작업 가이드 (상수) ---
 # 사용자가 제공한 최신 상세 목록으로 업데이트되었습니다.
@@ -207,7 +201,7 @@ UNIT_OPERATION_GUIDE_DATA = """
 @app.post("/generate_labnote", response_model=LabNoteResponse)
 async def generate_labnote(request: QueryRequest):
     """
-    (RAG + Template) 사용자의 쿼리를 기반으로 관련 SOP를 검색하고, 
+    (RAG + Template) 사용자의 쿼리를 기반으로 관련 SOP를 검색하고,
     체계적인 프롬프트를 사용하여 구조화된 연구 노트를 생성합니다.
     """
     try:
@@ -219,32 +213,26 @@ async def generate_labnote(request: QueryRequest):
         sources = list(set([doc.metadata.get('source', 'Unknown').split('/')[-1] for doc in retrieved_docs]))
 
         # 2. 시스템 프롬프트 (AI의 역할 및 규칙 정의)
-        system_prompt = """You are an expert AI assistant for biomedical researchers. Your mission is to generate a professional, structured lab note in Markdown format. You must strictly follow all rules and use the provided template.
-        """
+        system_prompt = """You are an expert AI assistant for biomedical researchers. Your mission is to generate a professional, structured lab note in Markdown format. You must strictly follow all rules and use the provided template. Do not output the rules themselves; only output the final, complete Markdown document."""
 
         # 3. 사용자 프롬프트 (AI에게 제공할 정보 및 최종 지시)
         current_date = datetime.datetime.now().strftime('%Y-%m-%d')
         user_prompt = f"""
----
 [TASK]
-Generate a complete lab note draft for the following user query: "{request.query}"
+Generate a complete lab note draft for the user query: "{request.query}"
 
----
-[CONTEXT]
+[CONTEXT FROM SOPs]
 {formatted_context}
 
----
 [CLASSIFICATION GUIDES]
 {WORKFLOW_GUIDE_DATA}
 {UNIT_OPERATION_GUIDE_DATA}
 
----
 [CRITICAL RULES]
-1.  **Context Validation (Guardrail):** First, analyze the [CONTEXT]. Is it relevant to the user's query? If the context is clearly irrelevant, you MUST IGNORE it and respond with only this message: "Error: Relevant information not found in the provided SOPs." Do not invent content.
-2.  **Handling Ambiguity:** If the user's query is general (e.g., "make a lab note"), use your best judgment to select the most relevant protocol from the [CONTEXT] to serve as the main theme.
-3.  **Content Source:** You MUST base the detailed content (Input, Reagent, Method, etc.) on the [CONTEXT]. Use the [CLASSIFICATION GUIDES] mainly to identify the correct Workflow/Unit Operation IDs and names.
+1. **Context Validation (Guardrail):** First, analyze the [CONTEXT]. If it's irrelevant to the query, respond ONLY with: "Error: Relevant information not found in SOPs."
+2. **Content Source:** Base the detailed content (Input, Reagent, Method, etc.) on the [CONTEXT]. Use the [CLASSIFICATION GUIDES] for correct IDs and names.
+3. **Completeness:** If the context is sparse, use your knowledge from the guides to create plausible, relevant content for any empty sections. Do not leave sections like "Method" blank.
 
----
 [OUTPUT TEMPLATE]
 ---
 title: "[AI Generated] {request.query}"
@@ -252,33 +240,36 @@ experimenter: AI Assistant
 created_date: '{current_date}'
 ---
 
-## Workflow: [Create a concise, descriptive title based on the user query and context]
+## Workflow: [Concise, descriptive title based on the query and context]
 
 > A one-sentence summary of this workflow.
 
 ## 🗂️ Relevant Unit Operations
 > <!-- UNITOPERATION_LIST_START -->
-
-[Extract and list the complete, relevant Unit Operation sections from the context here. Each section must include all its original fields like Description, Meta, Input, Reagent, Method, Output, etc. Ensure the final output strictly follows this Markdown structure.]
-
+[Extract and list COMPLETE, relevant Unit Operation sections from the context here. Each section must include all its original fields.]
 > <!-- UNITOPERATION_LIST_END -->
 ---
-
-Based on all the information provided above, generate the complete lab note now.
 """
         # 4. Ollama API 호출
         logger.info("Sending request to Ollama for lab note generation...")
-        llm_model_name = os.getenv("LLM_MODEL", "biomistral")
+        llm_model_name = os.getenv("LLM_MODEL", "biollama3")
         ollama_response = ollama.chat(
             model=llm_model_name,
             messages=[
                 {'role': 'system', 'content': system_prompt},
                 {'role': 'user', 'content': user_prompt}
             ],
-            options={'temperature': 0.4, 'top_p': 0.9}
+            options={'temperature': 0.1, 'top_p': 0.9}
         )
         generated_text = ollama_response['message']['content'].strip()
         logger.info("Successfully received and processed lab note response from Ollama.")
+
+        # 후처리: AI가 템플릿 마커를 출력한 경우 제거
+        if generated_text.startswith("---"):
+            parts = generated_text.split("---", 2)
+            if len(parts) > 2:
+                generated_text = "---\n" + parts[1].strip() + "\n---\n" + parts[2].strip()
+
 
         return LabNoteResponse(response=generated_text, sources=sources)
 
@@ -290,60 +281,35 @@ Based on all the information provided above, generate the complete lab note now.
 async def chat(request: QueryRequest):
     """
     (General Chat) RAG 없이 사용자의 질문을 LLM에 직접 전달하여 자유로운 답변을 생성합니다.
-    대화 기록을 관리하여 맥락을 유지합니다.
     """
     try:
-        logger.info(f"Received chat query: '{request.query}' for conversation_id: {request.conversation_id}")
+        logger.info(f"Received chat query: '{request.query}'")
 
-        conversation_id = request.conversation_id
-        
-        # 1. 대화 ID가 없으면 새로 생성
-        if not conversation_id or conversation_id not in conversation_histories:
-            conversation_id = str(uuid.uuid4())
-            logger.info(f"Starting new conversation with ID: {conversation_id}")
-            # 새 대화 시작 시 시스템 프롬프트 추가
-            system_prompt = "You are a helpful and knowledgeable AI assistant specializing in biotechnology and life sciences. Answer the user's questions clearly and concisely."
-            conversation_histories[conversation_id] = [{"role": "system", "content": system_prompt}]
+        # 시스템 프롬프트 (챗봇의 역할 정의)
+        system_prompt = "You are a helpful and knowledgeable AI assistant specializing in biotechnology and life sciences. Answer the user's questions clearly, concisely, and directly in Korean."
 
-        # 2. 현재 사용자 메시지를 대화 기록에 추가
-        conversation_histories[conversation_id].append({"role": "user", "content": request.query})
-
-        # 3. Ollama API 호출
-        logger.info(f"Sending request to Ollama for chat (conversation_id: {conversation_id})...")
-        llm_model_name = os.getenv("LLM_MODEL", "biomistral")
-        
+        # Ollama API 호출
+        logger.info("Sending request to Ollama for chat...")
+        llm_model_name = os.getenv("LLM_MODEL", "biollama3")
         ollama_response = ollama.chat(
             model=llm_model_name,
-            messages=conversation_histories[conversation_id], # 전체 대화 기록 전달
-            options={'temperature': 0.7}
+            messages=[
+                {'role': 'system', 'content': system_prompt},
+                {'role': 'user', 'content': request.query}
+            ],
+            options={'temperature': 0.5}
         )
-        
         generated_text = ollama_response['message']['content'].strip()
+        logger.info("Successfully received and processed chat response from Ollama.")
         
-        # 4. AI 응답을 대화 기록에 추가
-        conversation_histories[conversation_id].append({"role": "assistant", "content": generated_text})
-        
-        logger.info(f"Successfully processed chat response for conversation_id: {conversation_id}")
-        
-        return ChatResponse(response=generated_text, conversation_id=conversation_id)
+        return ChatResponse(response=generated_text)
 
     except Exception as e:
         logger.error(f"Error during chat: {e}", exc_info=True)
-        if conversation_id and conversation_id in conversation_histories:
-            del conversation_histories[conversation_id]
         raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/clear_history/{conversation_id}", summary="Clear Conversation History")
-def clear_history(conversation_id: str):
-    """특정 대화 ID의 기록을 삭제합니다."""
-    if conversation_id in conversation_histories:
-        del conversation_histories[conversation_id]
-        logger.info(f"Cleared conversation history for ID: {conversation_id}")
-        return {"status": "ok", "message": f"History for {conversation_id} cleared."}
-    else:
-        raise HTTPException(status_code=404, detail="Conversation ID not found.")
 
 @app.get("/", summary="Health Check")
 def health_check():
     """API 서버가 실행 중인지 확인하는 상태 체크 엔드포인트입니다."""
     return {"status": "ok", "version": "2.2.0"}
+

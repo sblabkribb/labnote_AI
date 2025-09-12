@@ -1,6 +1,6 @@
 # LabNote AI Assistant: 바이오파운드리를 위한 혁신적인 AI 솔루션
 
-이 프로젝트는 최신 AI 기술(BioMistral-7B, RAG, DPO)을 활용하여 과학자들을 위한 지능형 랩노트 어시스턴트를 구축하는 것을 목표로 합니다. 이 저장소는 로컬 개발 환경을 위한 완전한 코드 구조를 제공합니다.
+이 프로젝트는 최신 AI 기술(OpenBioLLM, RAG, DPO)을 활용하여 과학자들을 위한 지능형 랩노트 어시스턴트를 구축하는 것을 목표로 합니다. 이 저장소는 로컬 개발 환경을 위한 완전한 코드 구조를 제공합니다.
 
 ## 프로젝트 구조
 ```bash
@@ -36,11 +36,11 @@ docker-compose up -d
 * Ollama API는 `localhost:11434`에서 실행됩니다.
 
 ### 3. 커스텀 모델 등록 (Ollama)
-`ollama_custom_models/` 디렉토리에 `Modelfile`과 `biomistral-7b.Q4_K_M.gguf` 파일이 준비되어 있어야 합니다. 공싱에서 다운 받거나 커스텀 모델 가능 (이름만 바꿔주시면 됩니다.) 터미널에서 다음 명령어를 실행합니다.
+`ollama_custom_models/` 디렉토리에 `Modelfile`과 `OpenBioLLM.gguf` 파일이 준비되어 있어야 합니다. 공싱에서 다운 받거나 커스텀 모델 가능 (이름만 바꿔주시면 됩니다.) 터미널에서 다음 명령어를 실행합니다.
 
 ```bash
 cd ollama_custom_models
-ollama create biomistral -f Modelfile
+ollama create OpenBioLLM -f Modelfile
 ``` 
 ### 4. Python 백엔드 설정
 ```bash
