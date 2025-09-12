@@ -1,6 +1,6 @@
 #!/bin/bash
 # This script sets up the complete AI backend environment, including DPO training dependencies.
-# Version 5.0: Integrated DPO setup and environment configuration.
+# Version 5.1: Corrected Hugging Face repository IDs for both DPO and GGUF models.
 set -e
 
 # --- 1. System & Prerequisite Setup ---
@@ -53,8 +53,9 @@ echo ">>> (Step 4/6) Setting up main LLMs for Inference and DPO..."
 DPO_MODEL_PATH="/models/hf/Llama3-OpenBioLLM-8B"
 echo "    - Checking for DPO base model at ${DPO_MODEL_PATH}..."
 if [ ! -d "${DPO_MODEL_PATH}" ]; then
-    echo "    - DPO base model not found. Downloading from Hugging Face (unsloth/Llama3-OpenBioLLM-8B)..."
-    huggingface-cli download unsloth/Llama3-OpenBioLLM-8B --local-dir "${DPO_MODEL_PATH}" --local-dir-use-symlinks False
+    echo "    - DPO base model not found. Downloading from Hugging Face (BioMistral/Llama3-OpenBioLLM-8B)..."
+    # [수정됨] unsloth -> BioMistral/Llama3-OpenBioLLM-8B
+    huggingface-cli download BioMistral/Llama3-OpenBioLLM-8B --local-dir "${DPO_MODEL_PATH}" --local-dir-use-symlinks False
     echo "    - DPO base model downloaded."
 else
     echo "    - DPO base model already exists."
@@ -62,19 +63,20 @@ fi
 
 # Inference Model (Ollama GGUF format)
 INFERENCE_MODEL_NAME="biollama3"
-GGUF_MODEL_FILE_PATH="/models/gguf/Llama3-OpenBioLLM-8B.f16.gguf"
+GGUF_MODEL_FILE_PATH="/models/gguf/llama3-openbiollm-8b.Q4_K_M.gguf" # [수정됨] 정확한 파일명 지정
 echo "    - Checking for Inference model '${INFERENCE_MODEL_NAME}'..."
 if ! ollama list | grep -q "${INFERENCE_MODEL_NAME}"; then
     if [ ! -f "${GGUF_MODEL_FILE_PATH}" ]; then
-        echo "    - GGUF model file not found. Downloading from Hugging Face (mradermacher/Llama3-OpenBioLLM-8B-GGUF)..."
-        huggingface-cli download mradermacher/Llama3-OpenBioLLM-8B-GGUF \
-            Llama3-OpenBioLLM-8B.f16.gguf \
+        echo "    - GGUF model file not found. Downloading from Hugging Face (MoMonir/Llama3-OpenBioLLM-8B-GGUF)..."
+        # [수정됨] mradermacher -> MoMonir, 그리고 다운로드할 파일명 명시
+        huggingface-cli download MoMonir/Llama3-OpenBioLLM-8B-GGUF \
+            llama3-openbiollm-8b.Q4_K_M.gguf \
             --local-dir /models/gguf --local-dir-use-symlinks False
     fi
     
     echo "    - Creating Modelfile for '${INFERENCE_MODEL_NAME}'..."
     cat <<'EOF' > /models/Modelfile
-FROM /models/gguf/Llama3-OpenBioLLM-8B.f16.gguf
+FROM /models/gguf/llama3-openbiollm-8b.Q4_K_M.gguf
 TEMPLATE """<|begin_of_text|><|start_header_id|>system<|end_header_id|>
 
 {{ .System }}<|eot_id|><|start_header_id|>user<|end_header_id|>
@@ -94,7 +96,14 @@ fi
 
 # --- 5. Environment and Backend Dependencies Setup ---
 echo ">>> (Step 5/6) Setting up .env file and installing backend dependencies..."
-cd labnote-ai-backend
+# `labnote-ai-backend` 디렉터리가 존재할 경우에만 들어감
+if [ -d "labnote-ai-backend" ]; then
+    cd labnote-ai-backend
+else
+    # repository 루트에 있을 경우를 대비
+    echo "    - Already in the project root."
+fi
+
 
 # Create .env file
 echo "    - Creating .env file..."
@@ -115,7 +124,8 @@ EOF
 echo "    - Installing Python dependencies from requirements.txt..."
 pip install -r requirements.txt > /dev/null
 echo ">>> Backend dependencies installed and .env file created."
-cd ..
+
+# 시작 스크립트가 루트에서 실행될 경우를 대비해 다시 상위 디렉토리로 이동하지 않음
 
 # --- 6. Final Instructions ---
 echo ">>> (Step 6/6) Setup complete!"
