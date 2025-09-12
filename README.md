@@ -1,69 +1,116 @@
-# LabNote AI Assistant: 바이오파운드리를 위한 혁신적인 AI 솔루션
+# 🔬 LabNote AI Assistant
 
-이 프로젝트는 최신 AI 기술(OpenBioLLM, RAG, DPO)을 활용하여 과학자들을 위한 지능형 랩노트 어시스턴트를 구축하는 것을 목표로 합니다. 이 저장소는 로컬 개발 환경을 위한 완전한 코드 구조를 제공합니다.
+**당신의 실험 데이터(SOP)를 학습하여, 똑똑한 연구노트 초안을 생성하는 AI 비서**
 
-## 프로젝트 구조
-```bash
-├── labnote-ai-backend/ # Python FastAPI 백엔드
-│ ├── sops/ # 실험 SOP 문서 폴더
-│ ├── main.py # API 서버 진입점
-│ └── rag_pipeline.py # RAG 핵심 로직
-├── ollama_custom_models/ # Ollama용 커스텀 모델 파일
-├── vscode-labnote-extension/ # VS Code 확장 프로그램
-└── docker-compose.yml # Ollama & Redis 컨테이너 설정
+이 프로젝트는 로컬 LLM(거대 언어 모델), RAG(검색 증강 생성), FastAPI, VS Code Extension 기술을 통합하여 연구자들의 반복적인 문서 작성 업무를 자동화하고 실험의 효율성을 극대화하는 것을 목표로 합니다.
+
+## ✨ 주요 기능
+
+  * **대화형 노트 생성:** 사용자의 실험 목표를 입력하면, AI가 관련 워크플로우와 유닛 오퍼레이션을 추천하고, 사용자가 최종 구조를 확정하면 그에 맞춰 내용을 자동으로 채워줍니다.
+  * **RAG 기반의 정확성:** 당신의 `sops` 폴더에 있는 Markdown 형식의 실험 프로토콜(SOP)을 실시간으로 학습하여, 최신 정보를 바탕으로 정확하고 일관된 연구노트를 작성합니다.
+  * **전문 분야 Q\&A:** 생명과학 분야에 특화된 `Llama3-OpenBioLLM` 모델을 기반으로, 실험 프로토콜에 대한 질문이나 일반적인 과학 지식에 대해 답변하는 챗봇 기능을 제공합니다.
+  * **완벽한 로컬 환경:** 모든 AI 모델과 데이터는 Vessl 워크스페이스 또는 로컬 컴퓨터의 Docker 환경에서 직접 실행되므로, 민감한 연구 데이터가 외부로 유출될 걱정이 없습니다.
+
+## 🏗️ 시스템 아키텍처
+
+```
++------------------------+      +---------------------------------+      +------------------------+
+|   VS Code Extension    | ---> |        FastAPI Backend          | ---> |     Ollama LLM Server  |
+|      (Frontend)        |      | (main.py, RAG, API Endpoints)   |      | (Llama3, nomic-embed)  |
++------------------------+      +----------------------+----------+      +------------------------+
+                                         |
+                                         v
+                                +------------------+
+                                |  Redis VectorDB  |
+                                +------------------+
 ```
 
+## 🚀 시작하기
 
-## 빠른 시작 가이드
+### 사전 준비
 
-### 0.서버 실행
-서버에서 모델을 돌리기 때문에 이제 바로 vscode 이용가능 아래는 로컬에 모델 설치할때 기준.
-바로 `6번`으로 넘어가면 됨.
+  * **Vessl 계정** 또는 **Docker Desktop**
+  * **VS Code**
+  * **Git**
 
-### 1. 사전 준비
-- **Docker Desktop** 설치 및 실행 (기타 다른 desktop 가능)
-- **Python 3.10+** 설치
-- **Node.js 18+** 및 **npm** 설치
-- **VS Code** 설치
-- **Ollama** 데스크탑 앱 설치 ([공식 사이트](https://ollama.com/))
+-----
 
-### 2. Docker 컨테이너 실행 (Ollama & Redis)
-터미널에서 프로젝트 루트 디렉토리로 이동한 후, 다음 명령어를 실행합니다.
-```bash
-docker-compose up -d
-```
-* Redis는 `localhost:6379`에서 실행됩니다.
-* Ollama API는 `localhost:11434`에서 실행됩니다.
+### 설치 방법
 
-### 3. 커스텀 모델 등록 (Ollama)
-`ollama_custom_models/` 디렉토리에 `Modelfile`과 `OpenBioLLM.gguf` 파일이 준비되어 있어야 합니다. 공싱에서 다운 받거나 커스텀 모델 가능 (이름만 바꿔주시면 됩니다.) 터미널에서 다음 명령어를 실행합니다.
+Vessl을 사용하는 것이 가장 간편하며, 로컬 환경에서도 Docker를 이용해 동일하게 구성할 수 있습니다.
 
-```bash
-cd ollama_custom_models
-ollama create OpenBioLLM -f Modelfile
-``` 
-### 4. Python 백엔드 설정
-```bash
-cd labnote-ai-backend
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-pip install -r requirements.txt
-```
+#### Option 1: Vessl에서 실행 (권장)
 
-### 5. Python 백엔드 서버 실행
-```bash
-uvicorn main:app --reload --host 127.0.0.1 --port 8000
-```
-서버가 `http://127.0.0.1:8000`에서 실행됩니다. Swagger UI는 `http://127.0.0.1:8000/docs`에서 확인할 수 있습니다.
+1.  **Vessl 워크스페이스 생성:**
 
-## 6. VS Code 확장 프로그램 설치 및 실행
-* 1. VS Code에서 `vscode-labnote-extension` 폴더를 엽니다.
-* 2. 터미널에서 `npm install`을 실행하여 의존성을 설치합니다.
-* 3. F5 키를 눌러 확장 프로그램을 디버그 모드로 실행합니다. 새로운 VS Code 창이 열립니다.
-* 4. 새로운 VS Code 창에서 `Ctrl+Shift+P` (또는 `Cmd+Shift+P`)를 누르고 `LabNote AI: Generate Note` 명령어를 실행합니다.
+      * **GPU:** 모델에 따라 설정
+      * **시작 명령어:** `git clone https://github.com/sblabkribb/labnote_AI.git && cd labnote_AI && ./setup.sh`
 
-## SOP 문서 추가
-새로운 실험 프로토콜을 AI가 학습하도록 하려면, `labnote-ai-backend/sops/` 디렉토리에 .md 형식으로 파일을 추가한 후, 백엔드 서버를 재시작하면 자동으로 인덱싱됩니다.
+2.  **서버 실행 기다리기:** 워크스페이스가 생성되고 `setup.sh` 스크립트가 실행되며 필요한 모든 설정이 자동으로 진행됩니다. 로그 마지막에 `Uvicorn running on http://0.0.0.0:8000` 메시지가 보이면 서버 실행이 완료된 것입니다.
 
+3.  **Endpoint 주소 확인:** Vessl 워크스페이스의 "Endpoint" 탭에서 외부 접속 주소를 확인합니다. (예: `https://...vessl.ai`)
 
-## 
+#### Option 2: 로컬 컴퓨터에서 직접 실행 (고급)
+
+1.  **프로젝트 클론:**
+
+    ```bash
+    git clone https://github.com/sblabkribb/labnote_AI.git
+    cd labnote_AI
+    ```
+
+2.  **Docker 컨테이너 실행:**
+    `docker-compose.yml` 파일은 Ollama 서버와 Redis 데이터베이스를 실행합니다.
+
+    ```bash
+    docker-compose up -d
+    ```
+
+3.  **AI 모델 다운로드 및 설정:**
+    `setup.sh` 스크립트는 Docker 컨테이너가 아닌 로컬 환경에 직접 Ollama를 설치하고 모델을 설정하려고 시도할 수 있으므로, 아래 명령어를 수동으로 실행하여 Docker 컨테이너 내의 Ollama에 모델을 설정하는 것을 권장합니다.
+
+    ```bash
+    # 임베딩 모델 다운로드
+    docker exec -it labnote-ollama ollama pull nomic-embed-text
+
+    # 메인 LLM 다운로드 (시간이 오래 걸립니다)
+    docker exec -it labnote-ollama ollama pull mradermacher/llama3-openbiollm-8b-gguf:f16
+
+    # 커스텀 모델 생성
+    docker exec -it labnote-ollama ollama create biollama3 -f "/models/Modelfile" 
+    # (Modelfile 경로는 docker-compose.yml 설정에 맞게 조정 필요)
+    ```
+
+4.  **Python 백엔드 서버 실행:**
+
+    ```bash
+    cd labnote-ai-backend
+    pip install -r requirements.txt
+    uvicorn main:app --host 127.0.0.1 --port 8000
+    ```
+
+-----
+
+### 🔧 VS Code 확장 프로그램 설정
+
+백엔드 서버가 실행된 후, VS Code 확장 프로그램이 서버와 통신할 수 있도록 주소를 설정해야 합니다.
+
+1.  VS Code에서 `Ctrl + ,` (또는 `Cmd + ,`)를 눌러 설정을 엽니다.
+2.  검색창에 `labnote.ai.backendUrl` 을 검색합니다.
+3.  입력창에 백엔드 서버의 주소를 입력합니다.
+      * **Vessl 사용 시:** Vessl Endpoint 주소 (예: `https://...vessl.ai`)
+      * **로컬 실행 시:** `http://127.0.0.1:8000`
+
+-----
+
+### 💻 사용 방법
+
+1.  `Ctrl+Shift+P` (또는 `Cmd+Shift+P`)를 눌러 명령어 팔레트를 엽니다.
+2.  **`LabNote AI: 연구노트 생성`** 을 선택하고, 실험 목표를 입력합니다. (예: "golden gate assembly")
+3.  AI가 추천하는 **워크플로우**와 **유닛 오퍼레이션** 목록이 나타납니다. 목록을 확인하고 원하는 대로 수정한 후 `Enter`를 누릅니다.
+4.  잠시 후, AI가 생성한 연구노트 초안이 새로운 탭에 열립니다.
+5.  **`LabNote AI: 일반 대화 시작`** 명령어로 전문 분야에 대한 Q\&A도 가능합니다.
+
+### 📄 SOP 문서 추가
+
+AI가 더 많은 실험 프로토콜을 학습하게 하려면, `labnote-ai-backend/sops/` 디렉터리에 `.md` 형식으로 파일을 추가한 후 백엔드 서버를 재시작하면 자동으로 RAG 데이터베이스에 반영됩니다.
