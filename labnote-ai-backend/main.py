@@ -3,57 +3,32 @@ import logging
 import datetime
 import uuid
 import re
+import asyncio
+import json
+import redis.asyncio as redis
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List, Dict
-from collections import Counter
-import ollama
+from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 
-# RAG 파이프라인 싱글턴 인스턴스를 임포트합니다.
+# Local imports
 from rag_pipeline import rag_pipeline
+from agents import run_agent_team
+from llm_utils import call_llm_api
 
 # .env 파일 로드 및 로깅 설정
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# FastAPI 앱 초기화
-app = FastAPI(
-    title="LabNote AI Assistant Backend",
-    version="5.0.0", # Interactive 2-Step Generation
-    description="Generates lab notes by first recommending a structure (WF/UOs) and then filling the user-confirmed structure."
+# --- [최적화 1] 정규식 사전 컴파일 ---
+UO_BLOCK_EXTRACT_PATTERN = re.compile(
+    r"(### \[" + r"(?P<uo_id>U[A-Z]{2,3}\d{3})" + r".*?\n.*?)(?=### \[U[A-Z]{2,3}\d{3}|\Z)",
+    re.DOTALL
 )
 
-# --- 인메모리 대화 기록 저장소 ---
-conversation_histories: Dict[str, List[Dict[str, str]]] = {}
-
-# --- Pydantic 모델 정의 ---
-class QueryRequest(BaseModel):
-    query: str
-    conversation_id: Optional[str] = None
-
-class StructureResponse(BaseModel):
-    recommended_workflow_id: str
-    recommended_unit_operation_ids: List[str]
-    sources: List[str]
-
-class CreateNoteRequest(BaseModel):
-    query: str
-    workflow_id: str
-    unit_operation_ids: List[str]
-    experimenter: Optional[str] = "AI Assistant"
-
-class LabNoteResponse(BaseModel):
-    response: str
-    sources: Optional[List[str]] = None
-
-class ChatResponse(BaseModel):
-    response: str
-    conversation_id: str
-
-# --- 워크플로우 및 단위 작업 가이드 (상수) ---
-# (WORKFLOW_GUIDE_DATA와 UNIT_OPERATION_GUIDE_DATA는 매우 길기 때문에 생략합니다. 기존 코드를 그대로 사용하시면 됩니다.)
+# --- [최적화 2] 데이터 사전 처리 ---
 WORKFLOW_GUIDE_DATA = """
 # Workflows Guide
 ## Design (설계)
@@ -125,6 +100,7 @@ WORKFLOW_GUIDE_DATA = """
 - WL090: Fermentation Optimization Model Development (발효 데이터를 기반으로 목표 화합물 생산 최적 조건 탐색)
 - WL100: Foundation Model Development (대규모 서열 데이터셋을 이용한 파운데이션 모델 훈련)
 """
+
 UNIT_OPERATION_GUIDE_DATA = """
 # Unit Operations Guide
 ## Hardware (UHW)
@@ -213,12 +189,84 @@ UNIT_OPERATION_GUIDE_DATA = """
 - USW330: Well Plate Mapping (고처리량 스크리닝을 위한 웰 플레이트 매핑 소프트웨어)
 - USW340: Computation (일반적인 데이터 수집, 전처리, 분석 과정)
 """
-# --- 헬퍼 함수 ---
 
+def _precompute_data():
+    logger.info("Pre-computing static data (ALL_UOS, ALL_WORKFLOWS)...")
+    all_uos = {m.group(1): m.group(2).strip() for m in re.finditer(r'- \*\*([A-Z]{2,3}\d{3})\*\*: (.*)', UNIT_OPERATION_GUIDE_DATA)}
+    all_workflows = {m.group(1): m.group(2).strip() for m in re.finditer(r'- \*\*([A-Z]{2}\d{3})\*\*: (.*)', WORKFLOW_GUIDE_DATA)}
+    return all_uos, all_workflows
+
+ALL_UOS_DATA, ALL_WORKFLOWS_DATA = _precompute_data()
+
+# --- [최적화 3] Redis 연결 관리 ---
+redis_pool = None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global redis_pool
+    redis_url = os.getenv("REDIS_URL")
+    if not redis_url:
+        raise ValueError("REDIS_URL environment variable is not set.")
+    logger.info(f"Creating Redis connection pool for {redis_url}")
+    redis_pool = redis.asyncio.ConnectionPool.from_url(redis_url, decode_responses=True)
+    yield
+    logger.info("Closing Redis connection pool.")
+    if redis_pool:
+        await redis_pool.disconnect()
+
+# FastAPI 앱 초기화
+app = FastAPI(
+    title="LabNote AI Assistant Backend",
+    version="2.4.1",
+    description="Interactive lab note generation with DPO feedback loop and performance optimizations.",
+    lifespan=lifespan
+)
+
+# --- 인메모리 대화 기록 저장소 ---
+conversation_histories: Dict[str, List[Dict[str, str]]] = {}
+
+# --- Pydantic 모델 정의 ---
+class CreateScaffoldRequest(BaseModel):
+    query: str
+    workflow_id: str
+    unit_operation_ids: List[str]
+    experimenter: Optional[str] = "AI Assistant"
+
+class LabNoteResponse(BaseModel):
+    response: str
+
+class PopulateNoteRequest(BaseModel):
+    file_content: str
+    uo_id: str
+    section: str
+    query: str
+
+class PopulateNoteResponse(BaseModel):
+    uo_id: str
+    section: str
+    options: List[str]
+
+class PreferenceRequest(BaseModel):
+    uo_id: str
+    section: str
+    chosen: str
+    rejected: List[str]
+    query: str
+    file_content: str
+
+class ChatRequest(BaseModel):
+    query: str
+    conversation_id: Optional[str] = None
+
+class ChatResponse(BaseModel):
+    response: str
+    conversation_id: str
+
+# --- 헬퍼 함수 ---
 def get_seoul_date_string():
     return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9))).strftime('%Y-%m-%d')
 
-def create_unit_operation_template(uo_id, uo_name, experimenter):
+def create_unit_operation_template(uo_id: str, uo_name: str, experimenter: str) -> str:
     formatted_datetime = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9))).strftime('%Y-%m-%d %H:%M')
     return f"""
 ------------------------------------------------------------------------
@@ -228,143 +276,132 @@ def create_unit_operation_template(uo_id, uo_name, experimenter):
 - Start_date: '{formatted_datetime}'
 - End_date: ''
 #### Input
-- (samples from the previous step) 
+- (samples from the previous step)
 #### Reagent
-- (e.g. enzyme, buffer, etc.) 
+- (e.g. enzyme, buffer, etc.)
 #### Consumables
-- (e.g. filter, well-plate, etc.) 
+- (e.g. filter, well-plate, etc.)
 #### Equipment
-- (e.g. centrifuge, spectrophotometer, etc.) 
+- (e.g. centrifuge, spectrophotometer, etc.)
 #### Method
-- (method used in this step) 
+- (method used in this step)
 #### Output
-- (samples to the next step) 
+- (samples to the next step)
 #### Results & Discussions
 - (Any results and discussions. Link file path if needed)
 ------------------------------------------------------------------------
 """
 
-async def call_llm_api(system_prompt, user_prompt, model_name):
-    """LLM API를 호출하는 범용 비동기 함수."""
-    logger.info(f"Calling LLM: {model_name} for a specific task.")
-    try:
-        response = await ollama.AsyncClient().chat(
-            model=model_name,
-            messages=[
-                {'role': 'system', 'content': system_prompt},
-                {'role': 'user', 'content': user_prompt}
-            ],
-            options={'temperature': 0.1, 'top_p': 0.8} # 정확도를 위해 낮은 temperature
-        )
-        content = response['message']['content'].strip()
-        # 후처리: 불필요한 마크다운 코드 블록 제거
-        if content.startswith("```") and "```" in content[3:]:
-            content = re.sub(r'^```[a-zA-Z]*\n', '', content)
-            content = re.sub(r'\n```$', '', content)
-        return content
-    except Exception as e:
-        logger.error(f"LLM API call failed: {e}", exc_info=True)
-        return f"(LLM Error: Could not generate content due to: {e})"
+def _extract_section_content(uo_block: str, section_name: str) -> str:
+    pattern = re.compile(r"#### " + re.escape(section_name) + r"\n(.*?)(?=\n####|\n------------------------------------------------------------------------)", re.DOTALL)
+    match = pattern.search(uo_block)
+    if match:
+        content = match.group(1).strip()
+        return content if content and not content.startswith('(') else "(not specified)"
+    return "(not specified)"
 
 # --- API 엔드포인트 ---
 
-@app.post("/recommend_structure", response_model=StructureResponse)
-async def recommend_structure(request: QueryRequest):
-    """
-    사용자의 쿼리를 기반으로 가장 적합한 워크플로우와 유닛 오퍼레이션 목록을 추천합니다.
-    """
-    logger.info(f"Step 1: Received structure recommendation request for query: '{request.query}'")
+@app.post("/create_scaffold", response_model=LabNoteResponse)
+async def create_scaffold(request: CreateScaffoldRequest):
+    logger.info(f"Phase 1: Creating scaffold for WF: {request.workflow_id}")
     try:
-        # RAG를 통해 관련성 높은 문서 검색
-        initial_docs = rag_pipeline.retrieve_context(request.query, k=15)
+        wf_name = ALL_WORKFLOWS_DATA.get(request.workflow_id, "Custom Workflow")
         
-        # 문서 내용에서 WF 및 UO ID 추출
-        wf_pattern = re.compile(r'##\s+\[([A-Z]{2}\d{3})')
-        uo_pattern = re.compile(r'###\s+\[([A-Z]{3}\d{3})')
-        
-        wf_ids = [match for doc in initial_docs for match in wf_pattern.findall(doc.page_content)]
-        uo_ids = [match for doc in initial_docs for match in uo_pattern.findall(doc.page_content)]
-        
-        # 가장 빈도가 높은 ID를 메인으로 추천
-        main_wf_id = Counter(wf_ids).most_common(1)[0][0] if wf_ids else "WD070" # 기본값
-        
-        # 중복을 제거하고 순서를 유지한 UO 목록
-        unique_uo_ids = sorted(list(set(uo_ids)), key=lambda x: uo_ids.index(x))
-        
-        logger.info(f"Recommendation complete. WF: {main_wf_id}, UOs: {unique_uo_ids}")
-        
-        sources = list(set([doc.metadata.get('source', 'Unknown').split('/')[-1] for doc in initial_docs]))
-        
-        return StructureResponse(
-            recommended_workflow_id=main_wf_id,
-            recommended_unit_operation_ids=unique_uo_ids,
-            sources=sources
-        )
-    except Exception as e:
-        logger.error(f"Error during structure recommendation: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        uo_templates = [
+            create_unit_operation_template(uo_id, ALL_UOS_DATA.get(uo_id, "Unknown Operation"), request.experimenter)
+            for uo_id in request.unit_operation_ids
+        ]
 
-@app.post("/create_filled_note", response_model=LabNoteResponse)
-async def create_filled_note(request: CreateNoteRequest):
-    """
-    사용자가 확정한 구조(WF, UOs)를 기반으로 각 섹션의 내용을 채워 최종 연구 노트를 생성합니다.
-    """
-    logger.info(f"Step 2: Received request to create a filled note for WF: {request.workflow_id}")
-    llm_model_name = os.getenv("LLM_MODEL", "biollama3")
-    
-    try:
-        # 가이드 데이터에서 이름 정보 조회
-        all_workflows = {m.group(1): m.group(2).strip() for m in re.finditer(r'- \*\*([A-Z]{2}\d{3})\*\*: (.*)', WORKFLOW_GUIDE_DATA)}
-        all_uos = {m.group(1): m.group(2).strip() for m in re.finditer(r'- \*\*([A-Z]{2,3}\d{3})\*\*: (.*)', UNIT_OPERATION_GUIDE_DATA)}
-
-        wf_name = all_workflows.get(request.workflow_id, "Custom Workflow")
-        
-        # 1. 워크플로우 설명 생성
-        wf_desc_prompt = f"Based on the user's experiment goal '{request.query}' and the workflow '{request.workflow_id}: {wf_name}', write a concise one-sentence summary."
-        wf_desc_system = "You are an AI assistant. Output only the single summary sentence."
-        filled_wf_desc = await call_llm_api(wf_desc_system, wf_desc_prompt, llm_model_name)
-        
-        # 2. 각 유닛 오퍼레이션 내용 병렬 생성
-        filled_uo_contents = []
-        for uo_id in request.unit_operation_ids:
-            uo_name = all_uos.get(uo_id, "Unknown Operation")
-            logger.info(f"  - Generating content for UO: {uo_id} {uo_name}")
-            
-            # 특정 UO에 대한 타겟 RAG 검색
-            uo_context_docs = rag_pipeline.retrieve_context(f"protocol for {uo_id} {uo_name} in the context of {request.query}", k=5)
-            uo_context_str = "\n---\n".join([doc.page_content for doc in uo_context_docs])
-            
-            uo_template = create_unit_operation_template(uo_id, uo_name, request.experimenter)
-            
-            uo_fill_system = "You are an expert AI assistant. Your task is to complete a lab note template for a SINGLE unit operation. 1. **Validate Context:** Does the 'RAG CONTEXT' match the 'TEMPLATE's purpose? 2. **If Relevant:** Complete ALL placeholders `(...)` in the 'TEMPLATE' using the 'CONTEXT'. 3. **If Irrelevant:** IGNORE the context and fill fields with plausible guesses or 'N/A'. DO NOT copy an irrelevant protocol. 4. **Output:** Output ONLY the entire completed markdown block, starting from the `---...` line."
-            uo_fill_user = f"Complete the following TEMPLATE using the RAG CONTEXT.\n\n--- TEMPLATE ---\n{uo_template}\n\n--- RAG CONTEXT ---\n{uo_context_str}"
-            
-            filled_block = await call_llm_api(uo_fill_system, uo_fill_user, llm_model_name)
-            filled_uo_contents.append(filled_block)
-
-        # 3. 최종 노트 조립
-        logger.info("Assembling the final lab note...")
         final_note = f"""---
-title: "[AI Generated] {request.query}"
+title: "{request.query}"
 experimenter: {request.experimenter}
 created_date: '{get_seoul_date_string()}'
 ---
 
 ## [{request.workflow_id} {wf_name}]
-> {filled_wf_desc}
+> (Workflow summary will be generated here)
 
 ## 🗂️ Relevant Unit Operations
-{''.join(filled_uo_contents)}
+{''.join(uo_templates)}
 """
         return LabNoteResponse(response=final_note)
-        
     except Exception as e:
-        logger.error(f"Error during note creation: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error during scaffold creation: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error creating scaffold: {e}")
+
+@app.post("/populate_note", response_model=PopulateNoteResponse)
+async def populate_note(request: PopulateNoteRequest):
+    logger.info(f"Phase 2: Populating section '{request.section}' for UO '{request.uo_id}'")
+    try:
+        # UO 블록을 찾기 위한 동적 정규식 (사전 컴파일된 것 사용 불가, ID가 동적임)
+        pattern = re.compile(
+            r"(------------------------------------------------------------------------\n### \[" + re.escape(request.uo_id) + r".*?\]\n.*?------------------------------------------------------------------------)",
+            re.DOTALL
+        )
+        match = pattern.search(request.file_content)
+        if not match:
+            raise HTTPException(status_code=404, detail=f"Unit Operation block for ID '{request.uo_id}' not found.")
+        
+        uo_block = match.group(1)
+        # run_agent_team은 동기/CPU-bound 작업이므로 to_thread로 비동기 실행
+        agent_result = await asyncio.to_thread(run_agent_team, request.query, uo_block, request.section)
+        
+        if not agent_result or not agent_result.get("options"):
+            raise HTTPException(status_code=500, detail="Agent team failed to generate options.")
+        
+        return PopulateNoteResponse(**agent_result)
+    except Exception as e:
+        logger.error(f"Error populating note: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error populating note: {e}")
+
+@app.post("/record_preference", status_code=204)
+async def record_preference(request: PreferenceRequest):
+    logger.info(f"Phase 3: Recording preference for UO '{request.uo_id}' - Section '{request.section}'")
+    r = redis.Redis(connection_pool=redis_pool)
+    try:
+        await r.ping()
+        uo_name = ALL_UOS_DATA.get(request.uo_id, "Unknown Operation")
+
+        # UO 블록 검색을 위한 동적 정규식
+        uo_block_pattern = re.compile(r"(### \[" + re.escape(request.uo_id) + r".*?\n.*?)(?=### \[U[A-Z]{2,3}\d{3}|\Z)", re.DOTALL)
+        uo_match = uo_block_pattern.search(request.file_content)
+        uo_block_content = uo_match.group(1) if uo_match else ""
+
+        input_context = _extract_section_content(uo_block_content, "Input")
+        output_context = _extract_section_content(uo_block_content, "Output")
+
+        prompt = (
+            f"Given the experimental context, write the '{request.section}' section for the Unit Operation '{request.uo_id}: {uo_name}'.\n"
+            f"- Overall Goal: {request.query}\n"
+            f"- Starting Materials (Input): {input_context}\n"
+            f"- Desired End-Product (Output): {output_context}\n"
+        )
+        
+        preference_data = {
+            "prompt": prompt,
+            "chosen": request.chosen,
+            "rejected": request.rejected
+        }
+
+        key = f"dpo:preference:{uuid.uuid4()}"
+        # JSON 직렬화로 안전하게 저장
+        await r.set(key, json.dumps(preference_data, ensure_ascii=False))
+        
+        logger.info(f"Successfully recorded preference data to Redis with key: {key}")
+
+    except redis.exceptions.ConnectionError as e:
+        logger.error(f"Redis connection error: {e}", exc_info=True)
+        raise HTTPException(status_code=503, detail="Could not connect to Redis to record preference.")
+    except Exception as e:
+        logger.error(f"Error recording preference: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An internal error occurred while recording preference.")
+    
+    # 명시적으로 아무것도 반환하지 않음 → 204 No Content
+    return
 
 @app.post("/chat", response_model=ChatResponse)
-async def chat(request: QueryRequest):
-    # (기존 chat 함수와 동일, 변경 없음)
+async def chat(request: ChatRequest):
     try:
         logger.info(f"Received chat query: '{request.query}' for conversation_id: {request.conversation_id}")
         conversation_id = request.conversation_id
@@ -409,4 +446,4 @@ def clear_history(conversation_id: str):
 @app.get("/", summary="Health Check")
 def health_check():
     """API 서버가 실행 중인지 확인하는 상태 체크 엔드포인트입니다."""
-    return {"status": "ok", "version": "5.0.0"}
+    return {"status": "ok", "version": app.version}
