@@ -1,6 +1,6 @@
 #!/bin/bash
 # This script sets up the complete AI backend environment on a VESSL Workspace.
-# Version 3.4: Added idempotency checks to skip already completed steps for faster restarts.
+# Version 4.0: Idempotent and robust setup with clear logging.
 set -e
 
 # --- 1. System & Prerequisite Setup ---
@@ -11,62 +11,53 @@ pip install -q huggingface_hub[cli]
 echo ">>> Prerequisites are up to date."
 
 # --- 2. Redis Stack Server Setup ---
-if ! command -v redis-stack-server &> /dev/null
-then
-    echo ">>> (Step 2/5) Redis not found. Installing Redis Stack Server..."
+echo ">>> (Step 2/5) Setting up Redis Stack Server..."
+if ! command -v redis-stack-server &> /dev/null; then
+    echo "    - Installing Redis..."
     curl -fsSL https://packages.redis.io/gpg | gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg
     echo "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/redis.list > /dev/null
     apt-get update > /dev/null
     apt-get install -y redis-stack-server > /dev/null
+fi
+if ! pgrep -f redis-stack-server > /dev/null; then
     redis-stack-server --daemonize yes
-    echo ">>> Redis Stack Server installed and started."
+    echo ">>> Redis Stack Server started."
 else
-    echo ">>> (Step 2/5) Redis is already installed. Skipping."
-    # Ensure it's running
-    if ! pgrep -f redis-stack-server > /dev/null; then
-        redis-stack-server --daemonize yes
-        echo ">>> Redis Stack Server was not running, so it has been started."
-    fi
+    echo ">>> Redis is already running."
 fi
 
-# --- 3. Ollama Server Setup & Robust Wait ---
-if ! command -v ollama &> /dev/null
-then
-    echo ">>> (Step 3/5) Ollama not found. Installing and starting Ollama server..."
+# --- 3. Ollama and Required Models Setup ---
+echo ">>> (Step 3/5) Setting up Ollama and models..."
+if ! command -v ollama &> /dev/null; then
+    echo "    - Installing Ollama..."
     curl -fsSL https://ollama.com/install.sh | sh
+fi
+if ! pgrep -f "ollama serve" > /dev/null; then
+    echo "    - Starting Ollama server in background..."
     ollama serve &
-    sleep 5
-    echo ">>> Waiting for Ollama server to be fully ready..."
-    ollama pull nomic-embed-text # Use this as a readiness check
-    echo ">>> Ollama server is confirmed to be ready!"
-else
-    echo ">>> (Step 3/5) Ollama is already installed. Skipping installation."
-    if ! pgrep -f "ollama serve" > /dev/null; then
-        ollama serve &
-        sleep 5 # Give it a moment to start
-        echo ">>> Ollama server was not running, so it has been started."
-    fi
+    sleep 5 # Give it a moment to initialize
 fi
 
+echo "    - Verifying and pulling 'nomic-embed-text' model (used for readiness check)..."
+ollama pull nomic-embed-text > /dev/null # This both installs the model and confirms the server is ready.
+echo ">>> Ollama server and embedding model are ready."
 
 # --- 4. Main LLM Download and Setup ---
 MODEL_NAME="biollama3"
-MODEL_FILE_PATH="/models/Llama3-OpenBioLLM-8B.f16.gguf"
-
-if [ ! -f "$MODEL_FILE_PATH" ]; then
-    echo ">>> (Step 4/5) Model file not found. Downloading Llama3-OpenBioLLM-8B (F16)..."
-    huggingface-cli download mradermacher/Llama3-OpenBioLLM-8B-GGUF \
-        Llama3-OpenBioLLM-8B.f16.gguf \
-        --local-dir /models --local-dir-use-symlinks False
-    echo ">>> Model downloaded."
-else
-    echo ">>> (Step 4/5) Model file already exists. Skipping download."
-fi
+MODEL_FILE_PATH="/models/Llama3-OpenBioLLM-8B-F16.gguf"
+echo ">>> (Step 4/5) Setting up main LLM: ${MODEL_NAME}..."
 
 if ! ollama list | grep -q "$MODEL_NAME"; then
-    echo ">>> Creating Modelfile for '$MODEL_NAME'..."
+    if [ ! -f "$MODEL_FILE_PATH" ]; then
+        echo "    - Main model file not found. Downloading (~16GB)..."
+        huggingface-cli download aaditya/Llama3-OpenBioLLM-8B-GGUF \
+            Llama3-OpenBioLLM-8B-F16.gguf \
+            --local-dir /models --local-dir-use-symlinks False
+    fi
+    
+    echo "    - Creating Modelfile for '${MODEL_NAME}'..."
     cat <<'EOF' > /models/Modelfile
-FROM /models/Llama3-OpenBioLLM-8B.f16.gguf
+FROM /models/Llama3-OpenBioLLM-8B-F16.gguf
 TEMPLATE """<|begin_of_text|><|start_header_id|>system<|end_header_id|>
 
 {{ .System }}<|eot_id|><|start_header_id|>user<|end_header_id|>
@@ -77,19 +68,18 @@ PARAMETER stop "<|eot_id|>"
 PARAMETER stop "<|end_of_text|>"
 EOF
     
-    echo ">>> Creating custom model '$MODEL_NAME' with Ollama..."
+    echo "    - Creating custom model with Ollama..."
     ollama create "$MODEL_NAME" -f /models/Modelfile
-    echo ">>> '$MODEL_NAME' model created."
+    echo ">>> Main LLM '${MODEL_NAME}' is ready."
 else
-    echo ">>> Custom model '$MODEL_NAME' already exists. Skipping creation."
+    echo ">>> Main LLM '${MODEL_NAME}' already exists."
 fi
 
 # --- 5. FastAPI Backend Setup and Launch ---
 echo ">>> (Step 5/5) Setting up and launching FastAPI backend..."
 cd labnote-ai-backend
-pip install -r requirements.txt
-echo ">>> Backend dependencies are up to date."
+pip install -r requirements.txt > /dev/null
+echo ">>> Backend dependencies installed."
 
-echo ">>> Starting Uvicorn server on port 8000..."
+echo ">>> Starting Uvicorn server on http://0.0.0.0:8000"
 uvicorn main:app --host 0.0.0.0 --port 8000
-
