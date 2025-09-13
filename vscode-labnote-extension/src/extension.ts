@@ -4,6 +4,7 @@ const fetch = require('node-fetch');
 
 // API 응답 타입 정의
 interface LabNoteResponse { response: string; }
+interface ChatResponse { response: string; conversation_id: string; }
 interface PopulateResponse { uo_id: string; section: string; options: string[]; }
 
 // QuickPick 아이템 타입
@@ -43,7 +44,15 @@ export function activate(context: vscode.ExtensionContext) {
         await populateSectionFlow(outputChannel);
     });
 
-    context.subscriptions.push(generateDisposable, populateDisposable);
+    const chatDisposable = vscode.commands.registerCommand('labnote.ai.chat', async () => {
+        const userInput = await vscode.window.showInputBox({
+            prompt: 'AI에게 질문할 내용을 입력하세요.',
+            placeHolder: '예: CRISPR-Cas9 시스템에 대해 설명해줘'
+        });
+        if (userInput) await callChatApi(userInput, outputChannel);
+    });
+
+    context.subscriptions.push(generateDisposable, populateDisposable, chatDisposable);
 }
 
 // --- 주요 기능 구현부 ---
@@ -123,7 +132,7 @@ async function populateSectionFlow(outputChannel: vscode.OutputChannel) {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ uo_id: uoId, section, chosen: chosenText, rejected: rejectedOptions, query })
-            }).catch(err => {
+            }).catch((err: any) => {
                 outputChannel.appendLine(`[WARN] DPO 데이터 기록 실패: ${err.message}`);
             });
 
@@ -249,5 +258,46 @@ async function showUnifiedUoSelectionMenu(recommendedIds: string[]): Promise<str
     const selectedItems = await vscode.window.showQuickPick(allUoItems, { title: '사용할 Unit Operation 선택 (AI 추천 항목이 미리 선택됨)', canPickMany: true, matchOnDescription: true, placeHolder: '이름이나 ID로 검색하여 선택/해제 후 Enter', });
     return selectedItems?.map(item => item.id);
 }
+
+
+async function callChatApi(userInput: string, outputChannel: vscode.OutputChannel) {
+    await vscode.window.withProgress({
+        location: vscode.ProgressLocation.Notification,
+        title: "LabNote AI가 응답 중입니다...",
+        cancellable: false
+    }, async (progress) => {
+        try {
+            progress.report({ increment: 20, message: "AI에게 질문하는 중..." });
+            const config = vscode.workspace.getConfiguration('labnote.ai');
+            const baseUrl = config.get<string>('backendUrl');
+            if (!baseUrl) throw new Error("Backend URL이 설정되지 않았습니다.");
+            
+            const response = await fetch(`${baseUrl}/chat`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ query: userInput }),
+                timeout: 180000
+            });
+
+            if (!response.ok) {
+                const errorBody = await response.text();
+                throw new Error(`채팅 실패 (HTTP ${response.status}): ${errorBody}`);
+            }
+            const chatData = await response.json() as ChatResponse;
+
+            const doc = await vscode.workspace.openTextDocument({
+                content: `# AI 답변: ${userInput}\n\n---\n\n${chatData.response}`,
+                language: 'markdown'
+            });
+            await vscode.window.showTextDocument(doc, { preview: false });
+
+        } catch (error: any) {
+            vscode.window.showErrorMessage('LabNote AI와 대화 중 오류가 발생했습니다.');
+            outputChannel.appendLine(`[ERROR] ${error.message}`);
+            outputChannel.show(true);
+        }
+    });
+}
+
 
 export function deactivate() {}

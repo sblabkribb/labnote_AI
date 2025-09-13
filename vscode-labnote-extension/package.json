@@ -12,6 +12,7 @@
   ],
   "activationEvents": [
     "onCommand:labnote.ai.generate",
+    "onCommand:labnote.ai.populateSection",
     "onCommand:labnote.ai.chat"
   ],
   "main": "./out/extension.js",
@@ -20,6 +21,10 @@
       {
         "command": "labnote.ai.generate",
         "title": "LabNote AI: 연구노트 생성"
+      },
+      {
+        "command": "labnote.ai.populateSection",
+        "title": "LabNote AI: 섹션 내용 채우기"
       },
       {
         "command": "labnote.ai.chat",
@@ -31,7 +36,7 @@
       "properties": {
         "labnote.ai.backendUrl": {
           "type": "string",
-          "default": "http://123.37.5.184:0",
+          "default": "http://123.37.5.184:31465",
           "description": "The base URL of the LabNote AI backend server (e.g., https://...vessl.ai)."
         }
       }
