@@ -123,7 +123,7 @@ def supervisor_agent(state: AgentState):
     
     if section == "Method":
         return "method_agent"
-    elif section in ["Reagent", "Consumables", "Equipment"]:
+    elif section in ["Input", "Reagent", "Consumables", "Equipment"]:
         return "materials_agent"
     elif section in ["Output", "Results & Discussions"]:
         return "results_agent"

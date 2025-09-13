@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
+import ollama
 
 # Local imports
 from rag_pipeline import rag_pipeline
