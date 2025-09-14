@@ -32,7 +32,6 @@ def _extract_section_content(uo_block: str, section_name: str) -> str:
     match = pattern.search(uo_block)
     if match:
         content = match.group(1).strip()
-        # 플레이스홀더 텍스트가 아닌 실제 내용이 있을 경우에만 반환
         return content if content and not content.startswith('(') else "(not specified)"
     return "(not specified)"
 
@@ -52,9 +51,9 @@ async def _generate_options(query: str, uo_id: str, uo_name: str, section: str, 
     rag_context = rag_pipeline.format_context_for_prompt(context_docs)
 
     # 2. LLM 프롬프트 재구성
-    base_prompt = f"""
-You are an expert lab assistant writing a section of a lab note.
-Your task is to write the content for the **'{section}'** section of the Unit Operation **'{uo_id}: {uo_name}'**.
+    # 기본 지시사항: 모델이 수행할 역할과 주어진 컨텍스트를 명확히 설명
+    base_prompt = f"""You are an expert scientist writing a specific section for a lab note document.
+Your task is to write the content for the **'{section}'** section, under the Unit Operation **'{uo_id}: {uo_name}'**.
 
 **Experimental Context:**
 - **Overall Goal:** {query}
@@ -62,32 +61,48 @@ Your task is to write the content for the **'{section}'** section of the Unit Op
 - **Expected Output of this step:** {output_context}
 """
 
+    # RAG 검색 결과에 따라 지시사항 분기
     if "No relevant context found" in rag_context or not rag_context.strip():
         logger.warning(f"No relevant SOPs found for '{section}' in '{uo_name}'. Falling back to general knowledge.")
-        base_prompt += "\n**Instructions:**\nSince no specific SOPs were found, write a plausible and scientifically sound entry for this section based on your general knowledge. Start with a note: '[참고: 관련된 SOP가 없어 일반 지식을 바탕으로 생성됨]'"
+        # 참고 자료가 없을 때의 지시사항
+        instruction_prompt = """
+**Your Task:**
+Based on your general scientific knowledge, write a plausible and scientifically sound entry for the '{section}' section.
+Start your response with a note: `[참고: 관련된 SOP가 없어 일반 지식을 바탕으로 생성됨]`
+Directly write the content for the section. Do not add any extra titles, headings, or introductory phrases like "Here is the content...".
+"""
     else:
         sources = sorted(list(set([doc.metadata.get('source', 'Unknown').split(os.path.sep)[-1] for doc in context_docs])))
         attribution_str = f"[참고 SOP: {', '.join(sources)}]"
-        base_prompt += f"""
+        # 참고 자료가 있을 때의 지시사항
+        instruction_prompt = f"""
 **Reference Information from SOPs:**
+---
 {rag_context}
+---
 
-**Instructions:**
-Based *only* on the reference information provided above, write the content for the section. Begin your response with the attribution: "{attribution_str}". Do not add any information not present in the references.
+**Your Task:**
+Based *only* on the reference information provided above, write the content for the '{section}' section.
+Begin your response with the attribution: `{attribution_str}`.
+Directly write the content for the section. Do not add any information not present in the references or any extra titles or headings.
 """
 
+    # 최종 프롬프트 조합
+    final_user_prompt = base_prompt + instruction_prompt
+
+    # 스타일별 시스템 프롬프트 정의
     prompts = {
         "concise": {
-            "system": "You write in a clear, direct, and brief style, focusing on the essential steps or items. Use bullet points.",
-            "user": f"{base_prompt}\n\nGenerate a **concise** version for the '{section}' section."
+            "system": "You are a laboratory assistant who writes in a clear, direct, and brief style. Use bullet points for lists where appropriate. Your response must only contain the content for the requested section.",
+            "user": final_user_prompt
         },
         "detailed": {
-            "system": "You write in a highly detailed, step-by-step format, including specific parameters and quantities. Your tone is formal and precise.",
-            "user": f"{base_prompt}\n\nGenerate a **detailed** version for the '{section}' section."
+            "system": "You are a senior researcher who writes in a highly detailed, step-by-step format. Include specific parameters, quantities, and durations. Your tone is formal and precise. Your response must only contain the content for the requested section.",
+            "user": final_user_prompt
         },
         "alternative": {
-            "system": "You provide helpful advice, suggesting alternative methods, key considerations, or potential pitfalls to watch out for.",
-            "user": f"{base_prompt}\n\nGenerate a list of **alternatives or key considerations** for the '{section}' section."
+            "system": "You are a helpful lab manager providing advice. You list key considerations, potential pitfalls, or alternative methods to improve the experiment. Your response must only contain the content for the requested section.",
+            "user": final_user_prompt
         }
     }
 
@@ -95,11 +110,8 @@ Based *only* on the reference information provided above, write the content for 
     tasks = [call_llm_api(p["system"], p["user"]) for p in prompts.values()]
     generated_options = await asyncio.gather(*tasks)
     
-    # 에러가 발생하지 않은 유효한 옵션만 필터링
     valid_options = [opt for opt in generated_options if not opt.startswith("(LLM Error")]
-    # 최종 결과에서 불필요한 따옴표나 머리글 제거
-    cleaned_options = [re.sub(r"^(The answer is|Here is the content for .*?:)\s*['\"]?(.*?)['\"]?$", r"\2", opt, flags=re.DOTALL) for opt in valid_options]
-    return cleaned_options
+    return valid_options
 
 # --- Agent Nodes (비동기 호출 로직 수정) ---
 async def method_agent_async(state: AgentState) -> AgentState:
@@ -146,13 +158,9 @@ def route_request(state: AgentState) -> str:
     else:
         logger.warning(f"Router: No agent found for section '{section}'. Ending execution.")
         return END
-# --- Graph Definition
+
 def create_agent_graph():
-    """
-    Creates the agent graph with a conditional entry point for routing.
-    """
     graph = StateGraph(AgentState)
-    # Define the worker agent nodes
     graph.add_node("method_agent", method_agent)
     graph.add_node("materials_agent", materials_agent)
     graph.add_node("results_agent", results_agent)
@@ -165,7 +173,6 @@ def create_agent_graph():
             END: END
         }
     )
-    # All worker agents finish after their execution
     graph.add_edge("method_agent", END)
     graph.add_edge("materials_agent", END)
     graph.add_edge("results_agent", END)
@@ -176,9 +183,6 @@ def create_agent_graph():
 
 # --- Main execution function ---
 def run_agent_team(query: str, uo_block: str, section: str) -> Dict:
-    """
-    Parses a UO block, runs the appropriate agent, and returns generated options.
-    """
     match = re.search(r"### \[(U[A-Z]{2,3}\d{3}) (.*)\]", uo_block)
     if not match:
         logger.error(f"Could not parse UO ID and Name from block.")
