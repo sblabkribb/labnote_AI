@@ -2,7 +2,7 @@ import os
 import re
 import logging
 import asyncio
-from typing import List, Dict, TypedDict, Annotated
+from typing import List, Dict, TypedDict, Annotated, Tuple
 
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
@@ -25,7 +25,7 @@ class AgentState(TypedDict):
     options: Dict[str, List[str]]
     messages: Annotated[list, add_messages]
 
-# --- Helper functions ---
+# --- Helper function for content generation ---
 def _extract_section_content(uo_block: str, section_name: str) -> str:
     """Helper to extract content of a specific section from a UO block."""
     pattern = re.compile(r"#### " + re.escape(section_name) + r"\n(.*?)(?=\n####|\n------------------------------------------------------------------------)", re.DOTALL)
@@ -35,75 +35,86 @@ def _extract_section_content(uo_block: str, section_name: str) -> str:
         return content if content and not content.startswith('(') else "(not specified)"
     return "(not specified)"
 
-def _clean_llm_output(text: str) -> str:
-    """Removes common LLM artifacts and ensures the output is clean."""
-    # "Here is the..." 또는 "The method section should be..." 와 같은 서론 제거
-    text = re.sub(r"^(The\s(method|equipment|reagent)\ssection\sshould\sbe|Here is the content for)[^:\n]*:\s*", "", text, flags=re.IGNORECASE).strip()
-    # 마크다운 코드 블록 ` ``` ` 제거
-    text = re.sub(r"^```[a-zA-Z]*\n?|\n?```$", "", text).strip()
-    return text
-
-async def _generate_options(query: str, uo_id: str, uo_name: str, section: str, uo_block: str) -> List[str]:
+async def _generate_options(query: str, uo_id: str, uo_name: str, section: str, uo_block: str) -> Tuple[List[str], str]:
     """
-    RAG 검색 결과와 명확한 지시문을 사용하여 AI 제안 옵션을 생성합니다.
+    RAG 검색 결과에 따라 동적으로 프롬프트를 조정하고, 출처 정보 문자열을 함께 반환합니다. (예전 방식 적용)
     """
     logger.info(f"Generating options for UO '{uo_id}' - Section '{section}'")
-
-    # 1. RAG 검색 및 컨텍스트 강화
+    # 1. RAG Search Enhancement
     input_context = _extract_section_content(uo_block, "Input")
-    rag_query = f"protocol for '{section}' section of unit operation '{uo_id}: {uo_name}' for experiment '{query}'"
+    rag_query = f"detailed list of {section} for unit operation {uo_id} ({uo_name}) for the experiment: {query}"
     
+    logger.info(f"Refined RAG Query: {rag_query}")
     context_docs = rag_pipeline.retrieve_context(rag_query, k=3)
     rag_context = rag_pipeline.format_context_for_prompt(context_docs)
+    
+    # 2. Define LLM prompts for different style
+    attribution_str = "" # 출처 정보를 담을 변수
 
-    # 2. LLM 프롬프트 재구성 (가장 직접적인 방식으로 수정)
-    context_block = f"""
----
-**CONTEXT FOR YOUR TASK**
-- **Overall Experiment Goal:** {query}
-- **Current Unit Operation:** {uo_id}: {uo_name}
-- **Section to Write:** {section}
-- **Known Inputs for this step:** {input_context}
-"""
-
+    # RAG 검색 결과가 유의미한지 확인하고, 그에 따라 프롬프트와 출처 정보를 설정합니다.
     if "No relevant context found" in rag_context or not rag_context.strip():
-        logger.warning(f"No SOPs found for '{section}' in '{uo_name}'. Using general knowledge.")
-        context_block += "- **Reference SOPs:** None available. Use your general scientific knowledge.\n---"
-        attribution_str = "[참고: 관련된 SOP가 없어 일반 지식을 바탕으로 생성됨]"
+        logger.warning(f"No relevant SOPs found for '{section}' in '{uo_name}'. Falling back to general knowledge.")
+        attribution_str = "[주의: 참고할 SOP가 없어 LLM의 자체 지식으로 생성됨]"
+        user_prompt = f"""
+Please write the content for the '{section}' section of the Unit Operation '{uo_id}: {uo_name}'.
+The overall experiment goal is: '{query}'.
+The specific inputs for this step are: '{input_context}'.
+
+Based on your expert knowledge in molecular biology, generate a plausible protocol.
+Your response must ONLY be the content for the '{section}' section, without any titles or extra formatting.
+"""
     else:
         sources = sorted(list(set([doc.metadata.get('source', 'Unknown').split(os.path.sep)[-1] for doc in context_docs])))
         attribution_str = f"[참고 SOP: {', '.join(sources)}]"
-        context_block += f"- **Reference SOPs:**\n{rag_context}\n---"
+        user_prompt = f"""
+Based on the provided reference information, please write the content for the '{section}' section of the Unit Operation '{uo_id}: {uo_name}'.
+The overall experiment goal is: '{query}'.
+The specific inputs for this step are: '{input_context}'.
 
-    # 각 스타일에 맞는 명확하고 직접적인 지시문 생성
-    system_prompts = {
-        "concise": "You are a scientist writing a lab note. Your task is to provide a concise, bulleted list for the given section. Respond ONLY with the list content itself.",
-        "detailed": "You are a scientist writing a lab note. Your task is to provide a detailed, step-by-step protocol for the given section. Respond ONLY with the protocol content itself.",
-        "alternative": "You are a scientist writing a lab note. Your task is to provide a list of key considerations or alternative methods for the given section. Respond ONLY with the list content itself."
+--- REFERENCE INFORMATION ---
+{rag_context}
+---
+
+Your response must ONLY be the content for the '{section}' section, based strictly on the provided references. Do not add titles or extra formatting.
+"""
+
+    prompts = {
+        "concise": {
+            "system": f"You are an expert scientist. Write a clear and concise summary for the '{section}' section. Be brief and to the point.",
+            "user": user_prompt
+        },
+        "detailed": {
+            "system": f"You are an expert scientist. Write a highly detailed, step-by-step protocol for the '{section}' section. Include specific parameters, quantities, and durations where applicable.",
+            "user": user_prompt
+        },
+        "alternative": {
+            "system": f"You are an expert scientist. Suggest an alternative approach or a list of key considerations for the '{section}' section. Focus on potential pitfalls or optimization strategies.",
+            "user": user_prompt
+        }
     }
-    
-    # User prompt는 이제 컨텍스트와 최종 지시만 전달
-    user_prompt = f"{context_block}\n\n**Task:** Write the content for the '{section}' section now, starting with `{attribution_str}`."
-
-    # 3. LLM 호출 및 결과 처리
-    tasks = [call_llm_api(system_prompt, user_prompt) for system_prompt in system_prompts.values()]
+    # 3. Concurrent LLM calls
+    tasks = [call_llm_api(p["system"], p["user"]) for p in prompts.values()]
     generated_options = await asyncio.gather(*tasks)
-    
-    # 후처리 함수를 적용하여 결과 정리
-    valid_options = [_clean_llm_output(opt) for opt in generated_options if not opt.startswith("(LLM Error")]
-    # 비어있는 응답 필터링
-    valid_options = [opt for opt in valid_options if opt]
-    return valid_options
+
+    valid_options = [opt for opt in generated_options if not opt.startswith("(LLM Error")]
+    return valid_options, attribution_str
 
 # --- Agent Nodes ---
 async def agent_node_async(state: AgentState) -> AgentState:
     section = state['section_to_populate']
     logger.info(f"Agent Node: Generating content for {state['uo_id']} - Section '{section}'")
-    options = await _generate_options(state['query'], state['uo_id'], state['uo_name'], section, state['uo_block'])
-    if not options:
-        logger.warning(f"Agent for section '{section}' produced no valid options.")
-        options = ["[AI가 적절한 내용을 생성하지 못했습니다. 다른 섹션을 먼저 채우거나, 잠시 후 다시 시도해주세요.]"]
-    state['options'][section] = options
+    
+    options, attribution = await _generate_options(
+        state['query'], state['uo_id'], state['uo_name'], section, state['uo_block']
+    )
+    
+    # 생성된 각 옵션 앞에 출처 정보를 붙여줍니다.
+    state['options'][section] = [f"{attribution}\n{opt}" for opt in options if opt] if options else []
+
+    if not state['options'][section]:
+         logger.warning(f"Agent for section '{section}' produced no valid options.")
+         state['options'][section] = ["[AI가 적절한 내용을 생성하지 못했습니다. 다른 섹션을 먼저 채우거나, 잠시 후 다시 시도해주세요.]"]
+         
     return state
 
 def agent_node(state: AgentState) -> AgentState:
