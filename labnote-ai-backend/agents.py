@@ -25,7 +25,7 @@ class AgentState(TypedDict):
     options: Dict[str, List[str]]
     messages: Annotated[list, add_messages]
 
-# --- Helper function for content generation ---
+# --- Helper functions ---
 def _extract_section_content(uo_block: str, section_name: str) -> str:
     """Helper to extract content of a specific section from a UO block."""
     pattern = re.compile(r"#### " + re.escape(section_name) + r"\n(.*?)(?=\n####|\n------------------------------------------------------------------------)", re.DOTALL)
@@ -36,126 +36,97 @@ def _extract_section_content(uo_block: str, section_name: str) -> str:
     return "(not specified)"
 
 def _clean_llm_output(text: str) -> str:
-    """Removes common LLM artifacts like 'The answer is...' or markdown code blocks."""
-    # "The answer is [...]" 패턴 제거
-    text = re.sub(r"^(The answer is|The Answer is)\s*\[?([^\]]*)\]?\s*\.?\s*", r"\2", text, flags=re.IGNORECASE)
-    # 마크다운 코드 블록 제거
-    text = re.sub(r"^```[a-z]*\n", "", text)
-    text = re.sub(r"\n```$", "", text)
-    return text.strip()
+    """Removes common LLM artifacts like justifications or markdown code blocks."""
+    # "The answer is..." 또는 유사한 문구, "title: ..." 등 불필요한 부분 제거
+    text = re.sub(r"^(here's|the answer is|sure, here is|title:)[^:\n]*:\s*['\"]*", "", text, flags=re.IGNORECASE).strip()
+    text = re.sub(r"^\s*\[?[A-Za-z\s&]+\]?\s*\.?\s*$", "", text, flags=re.IGNORECASE).strip() # [Equipment] 같은 응답 제거
+    # 마크다운 코드 블록 ` ``` ` 제거
+    text = re.sub(r"^```[a-zA-Z]*\n?|\n?```$", "", text).strip()
+    return text
 
 async def _generate_options(query: str, uo_id: str, uo_name: str, section: str, uo_block: str) -> List[str]:
     """
-    RAG 검색 결과와 동적 프롬프트를 사용하여 AI 제안 옵션을 생성합니다.
+    RAG 검색 결과와 명확한 지시문을 사용하여 AI 제안 옵션을 생성합니다.
     """
     logger.info(f"Generating options for UO '{uo_id}' - Section '{section}'")
 
     # 1. RAG 검색 및 컨텍스트 강화
     input_context = _extract_section_content(uo_block, "Input")
-    output_context = _extract_section_content(uo_block, "Output")
-    rag_query = f"protocol for '{section}' in unit operation '{uo_id}: {uo_name}' for experiment '{query}'"
+    rag_query = f"list of {section} for unit operation {uo_id} ({uo_name}) for the experiment: {query}"
     
     context_docs = rag_pipeline.retrieve_context(rag_query, k=3)
     rag_context = rag_pipeline.format_context_for_prompt(context_docs)
 
-    # 2. LLM 프롬프트 재구성 (더욱 직접적인 방식으로)
-    system_prompt = "You are an expert scientist. Your task is to write content for a lab note. Do not add any extra titles, headings, or introductory phrases. Respond only with the content for the requested section."
+    # 2. LLM 프롬프트 재구성 (가장 직접적인 방식으로 수정)
+    system_prompt = f"You are an expert scientist writing a lab note. Your task is to write the content for the '{section}' section. You must only output the content for the section. Do not add any other text, titles, or explanations."
 
-    context_header = f"""
-**Experimental Context:**
-- **Goal:** {query}
-- **Unit Operation:** {uo_id}: {uo_name}
-- **Section to Write:** {section}
-- **Input:** {input_context}
-- **Output:** {output_context}
-"""
+    context_summary = f"**Experiment Goal:** {query}\n"
+    context_summary += f"**Unit Operation:** {uo_id}: {uo_name}\n"
+    context_summary += f"**Known Inputs:** {input_context}"
 
     if "No relevant context found" in rag_context or not rag_context.strip():
         logger.warning(f"No SOPs found for '{section}' in '{uo_name}'. Using general knowledge.")
-        context_header += "\n**Reference SOPs:** None available. Use your general knowledge."
+        context_summary += "\n**Reference SOPs:** None available."
         attribution_str = "[참고: 관련된 SOP가 없어 일반 지식을 바탕으로 생성됨]"
     else:
         sources = sorted(list(set([doc.metadata.get('source', 'Unknown').split(os.path.sep)[-1] for doc in context_docs])))
         attribution_str = f"[참고 SOP: {', '.join(sources)}]"
-        context_header += f"\n**Reference SOPs:**\n---\n{rag_context}\n---"
+        context_summary += f"\n**Reference SOPs:**\n{rag_context}"
 
-    prompts = {
-        "concise": f"{context_header}\n\n**Instruction:** Write a concise, bulleted list for the '{section}' section, starting with `{attribution_str}`.",
-        "detailed": f"{context_header}\n\n**Instruction:** Write a detailed, step-by-step protocol for the '{section}' section, starting with `{attribution_str}`.",
-        "alternative": f"{context_header}\n\n**Instruction:** Write a list of key considerations or alternative methods for the '{section}' section, starting with `{attribution_str}`."
+    # 각 스타일에 맞는 명확하고 직접적인 지시문 생성
+    user_prompts = {
+        "concise": f"Based on the context below, write a concise, bulleted list for the '{section}' section. Start your response with `{attribution_str}`.\n\n---\n{context_summary}",
+        "detailed": f"Based on the context below, write a detailed, step-by-step protocol for the '{section}' section. Start your response with `{attribution_str}`.\n\n---\n{context_summary}",
+        "alternative": f"Based on the context below, list key considerations or alternative methods for the '{section}' section. Start your response with `{attribution_str}`.\n\n---\n{context_summary}"
     }
 
     # 3. LLM 호출 및 결과 처리
-    tasks = [call_llm_api(system_prompt, user_prompt) for user_prompt in prompts.values()]
+    tasks = [call_llm_api(system_prompt, user_prompt) for user_prompt in user_prompts.values()]
     generated_options = await asyncio.gather(*tasks)
     
+    # 후처리 함수를 적용하여 결과 정리
     valid_options = [_clean_llm_output(opt) for opt in generated_options if not opt.startswith("(LLM Error")]
+    # 비어있는 응답 필터링
+    valid_options = [opt for opt in valid_options if opt]
     return valid_options
 
-# --- Agent Nodes (비동기 호출 로직 수정) ---
-async def method_agent_async(state: AgentState) -> AgentState:
-    logger.info(f"Method Agent: Generating content for {state['uo_id']}")
-    options = await _generate_options(state['query'], state['uo_id'], state['uo_name'], 'Method', state['uo_block'])
-    state['options']['Method'] = options
-    return state
-
-async def materials_agent_async(state: AgentState) -> AgentState:
+# --- Agent Nodes ---
+async def agent_node_async(state: AgentState) -> AgentState:
     section = state['section_to_populate']
-    logger.info(f"Materials Agent: Generating content for {state['uo_id']} - {section}")
+    logger.info(f"Agent Node: Generating content for {state['uo_id']} - Section '{section}'")
     options = await _generate_options(state['query'], state['uo_id'], state['uo_name'], section, state['uo_block'])
+    if not options:
+        logger.warning(f"Agent for section '{section}' produced no valid options.")
+        options = ["[AI가 적절한 내용을 생성하지 못했습니다. 다른 섹션을 먼저 채우거나, 잠시 후 다시 시도해주세요.]"]
     state['options'][section] = options
     return state
 
-async def results_agent_async(state: AgentState) -> AgentState:
-    section = state['section_to_populate']
-    logger.info(f"Results Agent: Generating content for {state['uo_id']} - {section}")
-    options = await _generate_options(state['query'], state['uo_id'], state['uo_name'], section, state['uo_block'])
-    state['options'][section] = options
-    return state
+def agent_node(state: AgentState) -> AgentState:
+    return asyncio.run(agent_node_async(state))
 
-# 동기 래퍼 함수
-def method_agent(state: AgentState) -> AgentState:
-    return asyncio.run(method_agent_async(state))
-    
-def materials_agent(state: AgentState) -> AgentState:
-    return asyncio.run(materials_agent_async(state))
-
-def results_agent(state: AgentState) -> AgentState:
-    return asyncio.run(results_agent_async(state))
-    
-# --- Routing Logic & Graph Definition (기존과 동일) ---
+# --- Graph Definition ---
 def route_request(state: AgentState) -> str:
     section = state['section_to_populate']
-    if section == "Method":
-        return "method_agent"
-    elif section in ["Input", "Reagent", "Consumables", "Equipment"]:
-        return "materials_agent"
-    elif section in ["Output", "Results & Discussions"]:
-        return "results_agent"
+    logger.info(f"Router: Routing task for section: '{section}'")
+    if section in ["Method", "Input", "Reagent", "Consumables", "Equipment", "Output", "Results & Discussions"]:
+        return "agent"
     else:
+        logger.warning(f"Router: No route found for section '{section}'. Ending execution.")
         return END
 
 def create_agent_graph():
     graph = StateGraph(AgentState)
-    graph.add_node("method_agent", method_agent)
-    graph.add_node("materials_agent", materials_agent)
-    graph.add_node("results_agent", results_agent)
+    graph.add_node("agent", agent_node)
     graph.set_conditional_entry_point(
         route_request,
-        {
-            "method_agent": "method_agent",
-            "materials_agent": "materials_agent",
-            "results_agent": "results_agent",
-            END: END
-        }
+        { "agent": "agent", END: END }
     )
-    graph.add_edge("method_agent", END)
-    graph.add_edge("materials_agent", END)
-    graph.add_edge("results_agent", END)
+    graph.add_edge("agent", END)
     agent_graph = graph.compile()
+    logger.info("Agent graph compiled successfully.")
     return agent_graph
 
-# --- Main execution function (기존과 동일) ---
+# --- Main execution function ---
 def run_agent_team(query: str, uo_block: str, section: str) -> Dict:
     match = re.search(r"### \[(U[A-Z]{2,3}\d{3}) (.*)\]", uo_block)
     if not match:
@@ -182,6 +153,7 @@ def run_agent_team(query: str, uo_block: str, section: str) -> Dict:
         "section": section,
         "options": final_state.get('options', {}).get(section, [])
     }
+
 
 if __name__ == '__main__':
     # Example usage for testing
