@@ -2,7 +2,7 @@ import os
 import re
 import logging
 import asyncio
-from typing import List, Dict, TypedDict, Annotated, Tuple
+from typing import List, Dict, TypedDict, Annotated
 
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
@@ -35,6 +35,15 @@ def _extract_section_content(uo_block: str, section_name: str) -> str:
         return content if content and not content.startswith('(') else "(not specified)"
     return "(not specified)"
 
+def _clean_llm_output(text: str) -> str:
+    """Removes common LLM artifacts like 'The answer is...' or markdown code blocks."""
+    # "The answer is [...]" 패턴 제거
+    text = re.sub(r"^(The answer is|The Answer is)\s*\[?([^\]]*)\]?\s*\.?\s*", r"\2", text, flags=re.IGNORECASE)
+    # 마크다운 코드 블록 제거
+    text = re.sub(r"^```[a-z]*\n", "", text)
+    text = re.sub(r"\n```$", "", text)
+    return text.strip()
+
 async def _generate_options(query: str, uo_id: str, uo_name: str, section: str, uo_block: str) -> List[str]:
     """
     RAG 검색 결과와 동적 프롬프트를 사용하여 AI 제안 옵션을 생성합니다.
@@ -44,73 +53,43 @@ async def _generate_options(query: str, uo_id: str, uo_name: str, section: str, 
     # 1. RAG 검색 및 컨텍스트 강화
     input_context = _extract_section_content(uo_block, "Input")
     output_context = _extract_section_content(uo_block, "Output")
-    rag_query = f"Provide a detailed protocol for the '{section}' section of the unit operation '{uo_id}: {uo_name}' as part of the experiment '{query}'."
+    rag_query = f"protocol for '{section}' in unit operation '{uo_id}: {uo_name}' for experiment '{query}'"
     
-    logger.info(f"Refined RAG Query: {rag_query}")
     context_docs = rag_pipeline.retrieve_context(rag_query, k=3)
     rag_context = rag_pipeline.format_context_for_prompt(context_docs)
 
-    # 2. LLM 프롬프트 재구성
-    # 기본 지시사항: 모델이 수행할 역할과 주어진 컨텍스트를 명확히 설명
-    base_prompt = f"""You are an expert scientist writing a specific section for a lab note document.
-Your task is to write the content for the **'{section}'** section, under the Unit Operation **'{uo_id}: {uo_name}'**.
+    # 2. LLM 프롬프트 재구성 (더욱 직접적인 방식으로)
+    system_prompt = "You are an expert scientist. Your task is to write content for a lab note. Do not add any extra titles, headings, or introductory phrases. Respond only with the content for the requested section."
 
+    context_header = f"""
 **Experimental Context:**
-- **Overall Goal:** {query}
-- **Input for this step:** {input_context}
-- **Expected Output of this step:** {output_context}
+- **Goal:** {query}
+- **Unit Operation:** {uo_id}: {uo_name}
+- **Section to Write:** {section}
+- **Input:** {input_context}
+- **Output:** {output_context}
 """
 
-    # RAG 검색 결과에 따라 지시사항 분기
     if "No relevant context found" in rag_context or not rag_context.strip():
-        logger.warning(f"No relevant SOPs found for '{section}' in '{uo_name}'. Falling back to general knowledge.")
-        # 참고 자료가 없을 때의 지시사항
-        instruction_prompt = """
-**Your Task:**
-Based on your general scientific knowledge, write a plausible and scientifically sound entry for the '{section}' section.
-Start your response with a note: `[참고: 관련된 SOP가 없어 일반 지식을 바탕으로 생성됨]`
-Directly write the content for the section. Do not add any extra titles, headings, or introductory phrases like "Here is the content...".
-"""
+        logger.warning(f"No SOPs found for '{section}' in '{uo_name}'. Using general knowledge.")
+        context_header += "\n**Reference SOPs:** None available. Use your general knowledge."
+        attribution_str = "[참고: 관련된 SOP가 없어 일반 지식을 바탕으로 생성됨]"
     else:
         sources = sorted(list(set([doc.metadata.get('source', 'Unknown').split(os.path.sep)[-1] for doc in context_docs])))
         attribution_str = f"[참고 SOP: {', '.join(sources)}]"
-        # 참고 자료가 있을 때의 지시사항
-        instruction_prompt = f"""
-**Reference Information from SOPs:**
----
-{rag_context}
----
+        context_header += f"\n**Reference SOPs:**\n---\n{rag_context}\n---"
 
-**Your Task:**
-Based *only* on the reference information provided above, write the content for the '{section}' section.
-Begin your response with the attribution: `{attribution_str}`.
-Directly write the content for the section. Do not add any information not present in the references or any extra titles or headings.
-"""
-
-    # 최종 프롬프트 조합
-    final_user_prompt = base_prompt + instruction_prompt
-
-    # 스타일별 시스템 프롬프트 정의
     prompts = {
-        "concise": {
-            "system": "You are a laboratory assistant who writes in a clear, direct, and brief style. Use bullet points for lists where appropriate. Your response must only contain the content for the requested section.",
-            "user": final_user_prompt
-        },
-        "detailed": {
-            "system": "You are a senior researcher who writes in a highly detailed, step-by-step format. Include specific parameters, quantities, and durations. Your tone is formal and precise. Your response must only contain the content for the requested section.",
-            "user": final_user_prompt
-        },
-        "alternative": {
-            "system": "You are a helpful lab manager providing advice. You list key considerations, potential pitfalls, or alternative methods to improve the experiment. Your response must only contain the content for the requested section.",
-            "user": final_user_prompt
-        }
+        "concise": f"{context_header}\n\n**Instruction:** Write a concise, bulleted list for the '{section}' section, starting with `{attribution_str}`.",
+        "detailed": f"{context_header}\n\n**Instruction:** Write a detailed, step-by-step protocol for the '{section}' section, starting with `{attribution_str}`.",
+        "alternative": f"{context_header}\n\n**Instruction:** Write a list of key considerations or alternative methods for the '{section}' section, starting with `{attribution_str}`."
     }
 
     # 3. LLM 호출 및 결과 처리
-    tasks = [call_llm_api(p["system"], p["user"]) for p in prompts.values()]
+    tasks = [call_llm_api(system_prompt, user_prompt) for user_prompt in prompts.values()]
     generated_options = await asyncio.gather(*tasks)
     
-    valid_options = [opt for opt in generated_options if not opt.startswith("(LLM Error")]
+    valid_options = [_clean_llm_output(opt) for opt in generated_options if not opt.startswith("(LLM Error")]
     return valid_options
 
 # --- Agent Nodes (비동기 호출 로직 수정) ---
@@ -134,7 +113,7 @@ async def results_agent_async(state: AgentState) -> AgentState:
     state['options'][section] = options
     return state
 
-# 동기 래퍼 함수 (LangGraph는 동기 함수를 노드로 사용)
+# 동기 래퍼 함수
 def method_agent(state: AgentState) -> AgentState:
     return asyncio.run(method_agent_async(state))
     
@@ -144,11 +123,9 @@ def materials_agent(state: AgentState) -> AgentState:
 def results_agent(state: AgentState) -> AgentState:
     return asyncio.run(results_agent_async(state))
     
-# --- Routing Logic & Graph Definition ---
+# --- Routing Logic & Graph Definition (기존과 동일) ---
 def route_request(state: AgentState) -> str:
-    logger.info(f"Router: Routing task for UO '{state['uo_id']}' - Section: '{state['section_to_populate']}'")
     section = state['section_to_populate']
-    
     if section == "Method":
         return "method_agent"
     elif section in ["Input", "Reagent", "Consumables", "Equipment"]:
@@ -156,7 +133,6 @@ def route_request(state: AgentState) -> str:
     elif section in ["Output", "Results & Discussions"]:
         return "results_agent"
     else:
-        logger.warning(f"Router: No agent found for section '{section}'. Ending execution.")
         return END
 
 def create_agent_graph():
@@ -176,12 +152,10 @@ def create_agent_graph():
     graph.add_edge("method_agent", END)
     graph.add_edge("materials_agent", END)
     graph.add_edge("results_agent", END)
-    
     agent_graph = graph.compile()
-    logger.info("Agent graph compiled successfully with conditional entry point.")
     return agent_graph
 
-# --- Main execution function ---
+# --- Main execution function (기존과 동일) ---
 def run_agent_team(query: str, uo_block: str, section: str) -> Dict:
     match = re.search(r"### \[(U[A-Z]{2,3}\d{3}) (.*)\]", uo_block)
     if not match:
