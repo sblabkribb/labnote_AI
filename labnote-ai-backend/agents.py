@@ -2,7 +2,7 @@ import os
 import re
 import logging
 import asyncio
-from typing import List, Dict, TypedDict, Annotated
+from typing import List, Dict, TypedDict, Annotated, Tuple
 
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
@@ -35,20 +35,38 @@ def _extract_section_content(uo_block: str, section_name: str) -> str:
         return content if content and not content.startswith('(') else "(not specified)"
     return "(not specified)"
 
-async def _generate_options(query: str, uo_id: str, uo_name: str, section: str, uo_block: str) -> List[str]:
+async def _generate_options(query: str, uo_id: str, uo_name: str, section: str, uo_block: str) -> Tuple[List[str], str]:
     """
-    Uses RAG and concurrent LLM calls to generate three distinct options for a given section.
+    RAG 검색 결과에 따라 동적으로 프롬프트를 조정하고, 출처 정보 문자열을 함께 반환합니다.
     """
-    logger.info(f"Generating options for UO '{uo_id}' - Section '{section}'")    
+    logger.info(f"Generating options for UO '{uo_id}' - Section '{section}'")
     # 1. RAG Search Enhancement
     input_context = _extract_section_content(uo_block, "Input")
-    rag_query = f"SOP for '{section}' in '{uo_name} ({uo_id})'. Experiment: '{query}'. Input materials: '{input_context}'"
+    rag_query = f"detailed list of {section} for unit operation {uo_id} ({uo_name}) for the experiment: {query}"
     
     logger.info(f"Refined RAG Query: {rag_query}")
     context_docs = rag_pipeline.retrieve_context(rag_query, k=3)
-    rag_context = rag_pipeline.format_context_for_prompt(context_docs)   
-    # 2. Define LLM prompts for different styles
-    user_prompt = f"""
+    rag_context = rag_pipeline.format_context_for_prompt(context_docs)
+    # 2. Define LLM prompts for different style
+    attribution_str = "" # 출처 정보를 담을 변수
+
+    # RAG 검색 결과가 유의미한지 확인하고, 그에 따라 프롬프트와 출처 정보를 설정합니다.
+    if "No relevant context found" in rag_context or not rag_context.strip():
+        logger.warning(f"No relevant SOPs found for '{section}' in '{uo_name}'. Falling back to general knowledge.")
+        attribution_str = "[주의: 참고할 SOP가 없어 LLM의 자체 지식으로 생성됨]"
+        user_prompt = f"""
+Please write the '{section}' section for the Unit Operation '{uo_id}: {uo_name}'.
+The overall goal of the experiment is: '{query}'.
+The specific inputs for this step are: '{input_context}'.
+
+Since no specific SOP was found, please generate a general, plausible protocol based on your expert knowledge in molecular biology.
+Your response should ONLY be the content for the '{section}' section, without any titles or extra formatting.
+"""
+    else:
+        # RAG 컨텍스트에서 참고한 소스 파일 이름을 추출합니다.
+        sources = list(set([doc.metadata.get('source', 'Unknown').split('/')[-1] for doc in context_docs]))
+        attribution_str = f"[참고 SOP: {', '.join(sources)}]"
+        user_prompt = f"""
 Based on the provided RAG CONTEXT, please write the '{section}' section for the Unit Operation '{uo_id}: {uo_name}'.
 The overall goal of the experiment is: '{query}'.
 The specific inputs for this step are: '{input_context}'.
@@ -73,49 +91,46 @@ Your response should ONLY be the content for the '{section}' section, without an
             "system": f"You are an expert scientist. Suggest an alternative approach or a list of key considerations for the '{section}' section. Focus on potential pitfalls or optimization strategies.",
             "user": user_prompt
         }
-    }    
+    }
     # 3. Concurrent LLM calls
     tasks = [call_llm_api(p["system"], p["user"]) for p in prompts.values()]
     generated_options = await asyncio.gather(*tasks)
-    # Filter out potential errors
-    return [opt for opt in generated_options if not opt.startswith("(LLM Error")]
 
-# --- Agent Nodes ---
+    # 생성된 옵션 리스트와 출처 문자열을 함께 반환합니다.
+    valid_options = [opt for opt in generated_options if not opt.startswith("(LLM Error")]
+    return valid_options, attribution_str
+
+# --- Agent Nodes: 출처 정보를 받아서 옵션 텍스트에 추가하도록 변경 ---
 def method_agent(state: AgentState) -> AgentState:
-    """Generates content for the 'Method' section."""
     logger.info(f"Method Agent: Generating content for {state['uo_id']}")
-    options = asyncio.run(
+    options, attribution = asyncio.run(
         _generate_options(state['query'], state['uo_id'], state['uo_name'], 'Method', state['uo_block'])
     )
-    state['options']['Method'] = options
+    # 각 옵션 앞에 출처 정보를 붙여줍니다.
+    state['options']['Method'] = [f"{attribution}\n\n{opt}" for opt in options]
     return state
 
 def materials_agent(state: AgentState) -> AgentState:
-    """Generates content for 'Input', 'Reagent', 'Consumables', and 'Equipment' sections."""
     section = state['section_to_populate']
     logger.info(f"Materials Agent: Generating content for {state['uo_id']} - {section}")
-    options = asyncio.run(
+    options, attribution = asyncio.run(
         _generate_options(state['query'], state['uo_id'], state['uo_name'], section, state['uo_block'])
     )
-    state['options'][section] = options
+    state['options'][section] = [f"{attribution}\n\n{opt}" for opt in options]
     return state
 
 def results_agent(state: AgentState) -> AgentState:
-    """Generates content for 'Output' and 'Results & Discussions' sections."""
     section = state['section_to_populate']
     logger.info(f"Results Agent: Generating content for {state['uo_id']} - {section}")
-    options = asyncio.run(
+    options, attribution = asyncio.run(
         _generate_options(state['query'], state['uo_id'], state['uo_name'], section, state['uo_block'])
     )
-    state['options'][section] = options
+    state['options'][section] = [f"{attribution}\n\n{opt}" for opt in options]
     return state
+
 
 # --- Routing Logic ---
 def route_request(state: AgentState) -> str:
-    """
-    Reads the section to populate and returns the name of the corresponding agent node.
-    This function ONLY directs traffic.
-    """
     logger.info(f"Router: Routing task for UO '{state['uo_id']}' - Section: '{state['section_to_populate']}'")
     section = state['section_to_populate']
     
@@ -129,18 +144,16 @@ def route_request(state: AgentState) -> str:
         logger.warning(f"Router: No agent found for section '{section}'. Ending execution.")
         return END
 
-# --- Graph Definition ---
+# --- Graph Definition (변경 없음) ---
 def create_agent_graph():
     """
     Creates the agent graph with a conditional entry point for routing.
     """
     graph = StateGraph(AgentState)
-    
     # Define the worker agent nodes
     graph.add_node("method_agent", method_agent)
     graph.add_node("materials_agent", materials_agent)
     graph.add_node("results_agent", results_agent)
-
     # The entry point is now a conditional one that uses the routing function
     graph.set_conditional_entry_point(
         route_request,
@@ -151,7 +164,6 @@ def create_agent_graph():
             END: END
         }
     )
-
     # All worker agents finish after their execution
     graph.add_edge("method_agent", END)
     graph.add_edge("materials_agent", END)
