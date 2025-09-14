@@ -81,7 +81,7 @@ function activate(context) {
                                         _a.label = 1;
                                     case 1:
                                         _a.trys.push([1, 8, , 9]);
-                                        return [4 /*yield*/, fetch('http://123.37.5.184:31838/generate_labnote', {
+                                        return [4 /*yield*/, fetch('http://123.37.6.118:30222/generate_labnote', {
                                                 method: 'POST',
                                                 headers: { 'Content-Type': 'application/json' },
                                                 body: JSON.stringify({ query: userInput }),

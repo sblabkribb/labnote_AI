@@ -6,12 +6,12 @@ import re
 import asyncio
 import json
 import redis.asyncio as redis
+import ollama
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List, Dict
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
-import ollama
 
 # Local imports
 from rag_pipeline import rag_pipeline
@@ -191,10 +191,12 @@ UNIT_OPERATION_GUIDE_DATA = """
 - USW340: Computation (일반적인 데이터 수집, 전처리, 분석 과정)
 """
 
+# 정규식에서 불필요한 `**` 부분을 제거합니다.
 def _precompute_data():
     logger.info("Pre-computing static data (ALL_UOS, ALL_WORKFLOWS)...")
-    all_uos = {m.group(1): m.group(2).strip() for m in re.finditer(r'- \*\*([A-Z]{2,3}\d{3})\*\*: (.*)', UNIT_OPERATION_GUIDE_DATA)}
-    all_workflows = {m.group(1): m.group(2).strip() for m in re.finditer(r'- \*\*([A-Z]{2}\d{3})\*\*: (.*)', WORKFLOW_GUIDE_DATA)}
+    all_uos = {m.group(1): m.group(2).strip() for m in re.finditer(r'- ([A-Z]{2,3}\d{3}): (.*)', UNIT_OPERATION_GUIDE_DATA)}
+    all_workflows = {m.group(1): m.group(2).strip() for m in re.finditer(r'- ([A-Z]{2}\d{3}): (.*)', WORKFLOW_GUIDE_DATA)}
+    logger.info(f"Loaded {len(all_workflows)} workflows and {len(all_uos)} unit operations.")
     return all_uos, all_workflows
 
 ALL_UOS_DATA, ALL_WORKFLOWS_DATA = _precompute_data()
@@ -397,7 +399,6 @@ async def record_preference(request: PreferenceRequest):
     except Exception as e:
         logger.error(f"Error recording preference: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred while recording preference.")
-    
     # 명시적으로 아무것도 반환하지 않음 → 204 No Content
     return
 
