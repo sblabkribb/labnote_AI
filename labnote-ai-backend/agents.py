@@ -37,7 +37,7 @@ def _extract_section_content(uo_block: str, section_name: str) -> str:
 
 async def _generate_options(query: str, uo_id: str, uo_name: str, section: str, uo_block: str) -> Tuple[List[str], str]:
     """
-    RAG 검색 결과에 따라 동적으로 프롬프트를 조정하고, 출처 정보 문자열을 함께 반환합니다. (예전 방식 적용)
+    RAG 검색 결과에 따라 동적으로 프롬프트를 조정하고, 출처 정보 문자열을 함께 반환합니다.
     """
     logger.info(f"Generating options for UO '{uo_id}' - Section '{section}'")
     # 1. RAG Search Enhancement
@@ -47,7 +47,6 @@ async def _generate_options(query: str, uo_id: str, uo_name: str, section: str, 
     logger.info(f"Refined RAG Query: {rag_query}")
     context_docs = rag_pipeline.retrieve_context(rag_query, k=3)
     rag_context = rag_pipeline.format_context_for_prompt(context_docs)
-    
     # 2. Define LLM prompts for different style
     attribution_str = "" # 출처 정보를 담을 변수
 
@@ -56,26 +55,27 @@ async def _generate_options(query: str, uo_id: str, uo_name: str, section: str, 
         logger.warning(f"No relevant SOPs found for '{section}' in '{uo_name}'. Falling back to general knowledge.")
         attribution_str = "[주의: 참고할 SOP가 없어 LLM의 자체 지식으로 생성됨]"
         user_prompt = f"""
-Please write the content for the '{section}' section of the Unit Operation '{uo_id}: {uo_name}'.
-The overall experiment goal is: '{query}'.
+Please write the '{section}' section for the Unit Operation '{uo_id}: {uo_name}'.
+The overall goal of the experiment is: '{query}'.
 The specific inputs for this step are: '{input_context}'.
 
-Based on your expert knowledge in molecular biology, generate a plausible protocol.
-Your response must ONLY be the content for the '{section}' section, without any titles or extra formatting.
+Since no specific SOP was found, please generate a general, plausible protocol based on your expert knowledge in molecular biology.
+Your response should ONLY be the content for the '{section}' section, without any titles or extra formatting.
 """
     else:
-        sources = sorted(list(set([doc.metadata.get('source', 'Unknown').split(os.path.sep)[-1] for doc in context_docs])))
+        # RAG 컨텍스트에서 참고한 소스 파일 이름을 추출합니다.
+        sources = list(set([doc.metadata.get('source', 'Unknown').split('/')[-1] for doc in context_docs]))
         attribution_str = f"[참고 SOP: {', '.join(sources)}]"
         user_prompt = f"""
-Based on the provided reference information, please write the content for the '{section}' section of the Unit Operation '{uo_id}: {uo_name}'.
-The overall experiment goal is: '{query}'.
+Based on the provided RAG CONTEXT, please write the '{section}' section for the Unit Operation '{uo_id}: {uo_name}'.
+The overall goal of the experiment is: '{query}'.
 The specific inputs for this step are: '{input_context}'.
 
---- REFERENCE INFORMATION ---
+--- RAG CONTEXT ---
 {rag_context}
 ---
 
-Your response must ONLY be the content for the '{section}' section, based strictly on the provided references. Do not add titles or extra formatting.
+Your response should ONLY be the content for the '{section}' section, without any titles or extra formatting.
 """
 
     prompts = {
@@ -96,54 +96,88 @@ Your response must ONLY be the content for the '{section}' section, based strict
     tasks = [call_llm_api(p["system"], p["user"]) for p in prompts.values()]
     generated_options = await asyncio.gather(*tasks)
 
+    # 생성된 옵션 리스트와 출처 문자열을 함께 반환합니다.
     valid_options = [opt for opt in generated_options if not opt.startswith("(LLM Error")]
     return valid_options, attribution_str
 
-# --- Agent Nodes ---
-async def agent_node_async(state: AgentState) -> AgentState:
-    section = state['section_to_populate']
-    logger.info(f"Agent Node: Generating content for {state['uo_id']} - Section '{section}'")
-    
-    options, attribution = await _generate_options(
-        state['query'], state['uo_id'], state['uo_name'], section, state['uo_block']
+# --- Agent Nodes: 출처 정보를 받아서 옵션 텍스트에 추가하도록 변경 ---
+def method_agent(state: AgentState) -> AgentState:
+    logger.info(f"Method Agent: Generating content for {state['uo_id']}")
+    options, attribution = asyncio.run(
+        _generate_options(state['query'], state['uo_id'], state['uo_name'], 'Method', state['uo_block'])
     )
-    
-    # 생성된 각 옵션 앞에 출처 정보를 붙여줍니다.
-    state['options'][section] = [f"{attribution}\n{opt}" for opt in options if opt] if options else []
-
-    if not state['options'][section]:
-         logger.warning(f"Agent for section '{section}' produced no valid options.")
-         state['options'][section] = ["[AI가 적절한 내용을 생성하지 못했습니다. 다른 섹션을 먼저 채우거나, 잠시 후 다시 시도해주세요.]"]
-         
+    # 각 옵션 앞에 출처 정보를 붙여줍니다.
+    state['options']['Method'] = [f"{attribution}\n\n{opt}" for opt in options]
     return state
 
-def agent_node(state: AgentState) -> AgentState:
-    return asyncio.run(agent_node_async(state))
-
-# --- Graph Definition ---
-def route_request(state: AgentState) -> str:
+def materials_agent(state: AgentState) -> AgentState:
     section = state['section_to_populate']
-    logger.info(f"Router: Routing task for section: '{section}'")
-    if section in ["Method", "Input", "Reagent", "Consumables", "Equipment", "Output", "Results & Discussions"]:
-        return "agent"
+    logger.info(f"Materials Agent: Generating content for {state['uo_id']} - {section}")
+    options, attribution = asyncio.run(
+        _generate_options(state['query'], state['uo_id'], state['uo_name'], section, state['uo_block'])
+    )
+    state['options'][section] = [f"{attribution}\n\n{opt}" for opt in options]
+    return state
+
+def results_agent(state: AgentState) -> AgentState:
+    section = state['section_to_populate']
+    logger.info(f"Results Agent: Generating content for {state['uo_id']} - {section}")
+    options, attribution = asyncio.run(
+        _generate_options(state['query'], state['uo_id'], state['uo_name'], section, state['uo_block'])
+    )
+    state['options'][section] = [f"{attribution}\n\n{opt}" for opt in options]
+    return state
+
+
+# --- Routing Logic ---
+def route_request(state: AgentState) -> str:
+    logger.info(f"Router: Routing task for UO '{state['uo_id']}' - Section: '{state['section_to_populate']}'")
+    section = state['section_to_populate']
+    
+    if section == "Method":
+        return "method_agent"
+    elif section in ["Input", "Reagent", "Consumables", "Equipment"]:
+        return "materials_agent"
+    elif section in ["Output", "Results & Discussions"]:
+        return "results_agent"
     else:
-        logger.warning(f"Router: No route found for section '{section}'. Ending execution.")
+        logger.warning(f"Router: No agent found for section '{section}'. Ending execution.")
         return END
 
+# --- Graph Definition (변경 없음) ---
 def create_agent_graph():
+    """
+    Creates the agent graph with a conditional entry point for routing.
+    """
     graph = StateGraph(AgentState)
-    graph.add_node("agent", agent_node)
+    # Define the worker agent nodes
+    graph.add_node("method_agent", method_agent)
+    graph.add_node("materials_agent", materials_agent)
+    graph.add_node("results_agent", results_agent)
+    # The entry point is now a conditional one that uses the routing function
     graph.set_conditional_entry_point(
         route_request,
-        { "agent": "agent", END: END }
+        {
+            "method_agent": "method_agent",
+            "materials_agent": "materials_agent",
+            "results_agent": "results_agent",
+            END: END
+        }
     )
-    graph.add_edge("agent", END)
+    # All worker agents finish after their execution
+    graph.add_edge("method_agent", END)
+    graph.add_edge("materials_agent", END)
+    graph.add_edge("results_agent", END)
+    
     agent_graph = graph.compile()
-    logger.info("Agent graph compiled successfully.")
+    logger.info("Agent graph compiled successfully with conditional entry point.")
     return agent_graph
 
 # --- Main execution function ---
 def run_agent_team(query: str, uo_block: str, section: str) -> Dict:
+    """
+    Parses a UO block, runs the appropriate agent, and returns generated options.
+    """
     match = re.search(r"### \[(U[A-Z]{2,3}\d{3}) (.*)\]", uo_block)
     if not match:
         logger.error(f"Could not parse UO ID and Name from block.")
