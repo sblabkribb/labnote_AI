@@ -118,7 +118,9 @@ async function populateSectionFlow(extensionContext: vscode.ExtensionContext, ou
                             return;
                         }
 
-                        const chosenText = populateData.options[chosenIndex];
+                        const chosenTextWithAttribution = populateData.options[chosenIndex];
+                        // ✨ 수정된 부분: 참고 SOP 정보 제거
+                        const chosenText = chosenTextWithAttribution.replace(/\[참고 SOP:.*?\]\s*\n\n/, '');
                         const rejectedOptions = populateData.options.filter((_, index) => index !== chosenIndex);
 
                         await editor.edit(editBuilder => {
@@ -131,7 +133,7 @@ async function populateSectionFlow(extensionContext: vscode.ExtensionContext, ou
                             body: JSON.stringify({ 
                                 uo_id: uoId, 
                                 section, 
-                                chosen: chosenText, 
+                                chosen: chosenText, // Attribution이 제거된 텍스트로 기록
                                 rejected: rejectedOptions, 
                                 query,
                                 file_content: editor.document.getText()

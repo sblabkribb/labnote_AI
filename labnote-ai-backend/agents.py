@@ -54,10 +54,10 @@ async def _generate_options(query: str, uo_id: str, uo_name: str, section: str, 
     if "No relevant context found" in rag_context or not rag_context.strip():
         logger.warning(f"No relevant SOPs found for '{section}' in '{uo_name}'. Falling back to general knowledge.")
         attribution_str = "[주의: 참고할 SOP가 없어 LLM의 자체 지식으로 생성됨]"
-        user_prompt = f"""
-Please write the '{section}' section for the Unit Operation '{uo_id}: {uo_name}'.
-The overall goal of the experiment is: '{query}'.
-The specific inputs for this step are: '{input_context}'.
+        base_user_prompt = f"""
+Here is the context for the Unit Operation '{uo_id}: {uo_name}':
+- The overall goal of the experiment is: '{query}'.
+- The specific inputs for this step are: '{input_context}'.
 
 Since no specific SOP was found, please generate a general, plausible protocol based on your expert knowledge in molecular biology.
 Your response should ONLY be the content for the '{section}' section, without any titles or extra formatting.
@@ -66,30 +66,31 @@ Your response should ONLY be the content for the '{section}' section, without an
         # RAG 컨텍스트에서 참고한 소스 파일 이름을 추출합니다.
         sources = list(set([doc.metadata.get('source', 'Unknown').split('/')[-1] for doc in context_docs]))
         attribution_str = f"[참고 SOP: {', '.join(sources)}]"
-        user_prompt = f"""
-Based on the provided RAG CONTEXT, please write the '{section}' section for the Unit Operation '{uo_id}: {uo_name}'.
-The overall goal of the experiment is: '{query}'.
-The specific inputs for this step are: '{input_context}'.
+        base_user_prompt = f"""
+Here is the context for the Unit Operation '{uo_id}: {uo_name}':
+- The overall goal of the experiment is: '{query}'.
+- The specific inputs for this step are: '{input_context}'.
 
---- RAG CONTEXT ---
+--- RAG CONTEXT (Relevant SOPs) ---
 {rag_context}
 ---
 
+Your task is to write the content for the '{section}' section.
 Your response should ONLY be the content for the '{section}' section, without any titles or extra formatting.
 """
 
     prompts = {
         "concise": {
-            "system": f"You are an expert scientist. Write a clear and concise summary for the '{section}' section. Be brief and to the point.",
-            "user": user_prompt
+            "system": f"You are an expert scientist. Based on the user's context, write a clear and concise summary for the '{section}' section. Focus on the key steps and parameters.",
+            "user": f"{base_user_prompt}\n\nPlease provide a concise summary of the method."
         },
         "detailed": {
-            "system": f"You are an expert scientist. Write a highly detailed, step-by-step protocol for the '{section}' section. Include specific parameters, quantities, and durations where applicable.",
-            "user": user_prompt
+            "system": f"You are an expert scientist. Based on the user's context, write a highly detailed, step-by-step protocol for the '{section}' section. Include specific parameters, quantities, and durations where applicable.",
+            "user": f"{base_user_prompt}\n\nPlease provide a detailed, step-by-step protocol."
         },
         "alternative": {
-            "system": f"You are an expert scientist. Suggest an alternative approach or a list of key considerations for the '{section}' section. Focus on potential pitfalls or optimization strategies.",
-            "user": user_prompt
+            "system": f"You are an expert scientist. Based on the user's context, suggest an alternative approach or a list of key considerations for the '{section}' section. Focus on potential pitfalls or optimization strategies.",
+            "user": f"{base_user_prompt}\n\nPlease provide an alternative approach or list key considerations and potential optimizations."
         }
     }
     # 3. Concurrent LLM calls

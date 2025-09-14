@@ -22,7 +22,7 @@ created_date: '2025-09-14'
 #### Consumables
 - (e.g. filter, well-plate, etc.)
 #### Equipment
-- (e.g. centrifuge, spectrophotometer, etc.)
+The answer is Equipment: Computer
 #### Method
 - 
 - (samples to the next step)
