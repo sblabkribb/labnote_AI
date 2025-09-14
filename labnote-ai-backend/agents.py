@@ -36,10 +36,9 @@ def _extract_section_content(uo_block: str, section_name: str) -> str:
     return "(not specified)"
 
 def _clean_llm_output(text: str) -> str:
-    """Removes common LLM artifacts like justifications or markdown code blocks."""
-    # "The answer is..." 또는 유사한 문구, "title: ..." 등 불필요한 부분 제거
-    text = re.sub(r"^(here's|the answer is|sure, here is|title:)[^:\n]*:\s*['\"]*", "", text, flags=re.IGNORECASE).strip()
-    text = re.sub(r"^\s*\[?[A-Za-z\s&]+\]?\s*\.?\s*$", "", text, flags=re.IGNORECASE).strip() # [Equipment] 같은 응답 제거
+    """Removes common LLM artifacts and ensures the output is clean."""
+    # "Here is the..." 또는 "The method section should be..." 와 같은 서론 제거
+    text = re.sub(r"^(The\s(method|equipment|reagent)\ssection\sshould\sbe|Here is the content for)[^:\n]*:\s*", "", text, flags=re.IGNORECASE).strip()
     # 마크다운 코드 블록 ` ``` ` 제거
     text = re.sub(r"^```[a-zA-Z]*\n?|\n?```$", "", text).strip()
     return text
@@ -52,36 +51,42 @@ async def _generate_options(query: str, uo_id: str, uo_name: str, section: str, 
 
     # 1. RAG 검색 및 컨텍스트 강화
     input_context = _extract_section_content(uo_block, "Input")
-    rag_query = f"list of {section} for unit operation {uo_id} ({uo_name}) for the experiment: {query}"
+    rag_query = f"protocol for '{section}' section of unit operation '{uo_id}: {uo_name}' for experiment '{query}'"
     
     context_docs = rag_pipeline.retrieve_context(rag_query, k=3)
     rag_context = rag_pipeline.format_context_for_prompt(context_docs)
 
     # 2. LLM 프롬프트 재구성 (가장 직접적인 방식으로 수정)
-    system_prompt = f"You are an expert scientist writing a lab note. Your task is to write the content for the '{section}' section. You must only output the content for the section. Do not add any other text, titles, or explanations."
-
-    context_summary = f"**Experiment Goal:** {query}\n"
-    context_summary += f"**Unit Operation:** {uo_id}: {uo_name}\n"
-    context_summary += f"**Known Inputs:** {input_context}"
+    context_block = f"""
+---
+**CONTEXT FOR YOUR TASK**
+- **Overall Experiment Goal:** {query}
+- **Current Unit Operation:** {uo_id}: {uo_name}
+- **Section to Write:** {section}
+- **Known Inputs for this step:** {input_context}
+"""
 
     if "No relevant context found" in rag_context or not rag_context.strip():
         logger.warning(f"No SOPs found for '{section}' in '{uo_name}'. Using general knowledge.")
-        context_summary += "\n**Reference SOPs:** None available."
+        context_block += "- **Reference SOPs:** None available. Use your general scientific knowledge.\n---"
         attribution_str = "[참고: 관련된 SOP가 없어 일반 지식을 바탕으로 생성됨]"
     else:
         sources = sorted(list(set([doc.metadata.get('source', 'Unknown').split(os.path.sep)[-1] for doc in context_docs])))
         attribution_str = f"[참고 SOP: {', '.join(sources)}]"
-        context_summary += f"\n**Reference SOPs:**\n{rag_context}"
+        context_block += f"- **Reference SOPs:**\n{rag_context}\n---"
 
     # 각 스타일에 맞는 명확하고 직접적인 지시문 생성
-    user_prompts = {
-        "concise": f"Based on the context below, write a concise, bulleted list for the '{section}' section. Start your response with `{attribution_str}`.\n\n---\n{context_summary}",
-        "detailed": f"Based on the context below, write a detailed, step-by-step protocol for the '{section}' section. Start your response with `{attribution_str}`.\n\n---\n{context_summary}",
-        "alternative": f"Based on the context below, list key considerations or alternative methods for the '{section}' section. Start your response with `{attribution_str}`.\n\n---\n{context_summary}"
+    system_prompts = {
+        "concise": "You are a scientist writing a lab note. Your task is to provide a concise, bulleted list for the given section. Respond ONLY with the list content itself.",
+        "detailed": "You are a scientist writing a lab note. Your task is to provide a detailed, step-by-step protocol for the given section. Respond ONLY with the protocol content itself.",
+        "alternative": "You are a scientist writing a lab note. Your task is to provide a list of key considerations or alternative methods for the given section. Respond ONLY with the list content itself."
     }
+    
+    # User prompt는 이제 컨텍스트와 최종 지시만 전달
+    user_prompt = f"{context_block}\n\n**Task:** Write the content for the '{section}' section now, starting with `{attribution_str}`."
 
     # 3. LLM 호출 및 결과 처리
-    tasks = [call_llm_api(system_prompt, user_prompt) for user_prompt in user_prompts.values()]
+    tasks = [call_llm_api(system_prompt, user_prompt) for system_prompt in system_prompts.values()]
     generated_options = await asyncio.gather(*tasks)
     
     # 후처리 함수를 적용하여 결과 정리
@@ -153,7 +158,6 @@ def run_agent_team(query: str, uo_block: str, section: str) -> Dict:
         "section": section,
         "options": final_state.get('options', {}).get(section, [])
     }
-
 
 if __name__ == '__main__':
     # Example usage for testing
