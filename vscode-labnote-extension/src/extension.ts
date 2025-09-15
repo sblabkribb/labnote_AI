@@ -1,17 +1,14 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as logic from './logic';
 
+// node-fetch v2는 CommonJS 모듈이므로 require 구문을 사용하는 것이 가장 안정적입니다.
 const fetch = require('node-fetch');
 
 // API 응답 타입 정의
-interface LabNoteResponse { response: string; }
 interface ChatResponse { response: string; conversation_id: string; }
 interface PopulateResponse { uo_id: string; section: string; options: string[]; }
-
-// QuickPick 아이템 타입
-interface UnitOperationQuickPickItem extends vscode.QuickPickItem { id: string; }
-// findSectionContext 함수의 반환 타입을 명확하게 인터페이스로 정의합니다.
 interface SectionContext {
     uoId: string;
     section: string;
@@ -20,50 +17,366 @@ interface SectionContext {
     placeholderRange: vscode.Range;
 }
 
-// 상수
-const ALL_WORKFLOWS: { [id: string]: string } = {
-    "WD010": "General Design of Experiment", "WD020": "Adaptive Laboratory Evolution Design", "WD030": "Growth Media Design", "WD040": "Parallel Cell Culture/Fermentation Design", "WD050": "DNA Oligomer Pool Design", "WD060": "Genetic Circuit Design", "WD070": "Vector Design", "WD080": "Artificial Genome Design", "WD090": "Genome Editing Design", "WD100": "Protein Library Design", "WD110": "De novo Protein/Enzyme Design", "WD120": "Retrosynthetic Pathway Design", "WD130": "Pathway Library Design",
-    "WB005": "Nucleotide Quantification", "WB010": "DNA Oligomer Assembly", "WB020": "DNA Library Construction", "WB025": "Sequencing Library Preparation", "WB030": "DNA Assembly", "WB040": "DNA Purification", "WB045": "DNA Extraction", "WB050": "RNA Extraction", "WB060": "DNA Multiplexing", "WB070": "Cell-free Mixture Preparation", "WB080": "Cell-free Protein/Enzyme Expression", "WB090": "Protein Purification", "WB100": "Growth Media Preparation and Sterilization", "WB110": "Competent Cell Construction", "WB120": "Biology-mediated DNA Transfers", "WB125": "Colony Picking", "WB130": "Solid Media Cell Culture", "WB140": "Liquid Media Cell Culture", "WB150": "PCR-based Target Amplification",
-    "WT010": "Nucleotide Sequencing", "WT012": "Targeted mRNA Expression Measurement", "WT015": "Nucleic Acid Size Verification", "WT020": "Protein Expression Measurement", "WT030": "Protein/Enzyme Activity Measurement", "WT040": "Parallel Cell-free Protein/Enzyme Reaction", "WT045": "Mammalian Cell Cytotoxicity Assay", "WT046": "Microbial Viability and Cytotoxicity Assay", "WT050": "Sample Pretreatment", "WT060": "Metabolite Measurement", "WT070": "High-throughput Single Metabolite Measurement", "WT080": "Image Analysis", "WT085": "Mycoplasma Contamination Test", "WT090": "High-speed Cell Sorting", "WT100": "Micro-scale Parallel Cell Culture", "WT110": "Micro-scale Parallel Cell Fermentation", "WT120": "Parallel Cell Fermentation", "WT130": "Parallel Mammalian Cell Fermentation", "WT140": "Lab-scale Fermentation", "WT150": "Pilot-scale Fermentation", "WT160": "Industrial-scale Fermentation",
-    "WL010": "Sequence Variant Analysis", "WL020": "Genome Resequencing Analysis", "WL030": "De novo Genome Analysis", "WL040": "Metagenomic Analysis", "WL050": "Transcriptome Analysis", "WL055": "Single Cell Analysis", "WL060": "Metabolic Pathway Optimization Model Development", "WL070": "Phenotypic Data Analysis", "WL080": "Protein/Enzyme Optimization Model Development", "WL090": "Fermentation Optimization Model Development", "WL100": "Foundation Model Development"
-};
-const ALL_UOS: { [id: string]: string } = {
-    "UHW010": "Liquid Handling", "UHW015": "Bulk Liquid Dispenser", "UHW020": "96 Channel Liquid Handling", "UHW030": "Nanoliter Liquid Dispensing", "UHW040": "Desktop Liquid Handling", "UHW050": "Single Cell Sequencing Preparation", "UHW060": "Colony Picking", "UHW070": "Cell Sorting", "UHW080": "Cell Lysis", "UHW090": "Electroporation", "UHW100": "Thermocycling", "UHW110": "Real-time PCR", "UHW120": "Plate Handling", "UHW130": "Sealing", "UHW140": "Peeling", "UHW150": "Capping Decapping", "UHW160": "Sample Storage", "UHW170": "Plate Storage", "UHW180": "Incubation", "UHW190": "HT Aerobic Fermentation", "UHW200": "HT Anaerobic Fermentation", "UHW210": "Microbioreactor Fermentation", "UHW220": "Bioreactor Fermentation", "UHW230": "Nucleic Acid Fragment Analysis", "UHW240": "Protein Fragment Analysis", "UHW250": "Nucleic Acid Purification", "UHW255": "Centrifuge", "UHW260": "Short-read Sequence Analysis", "UHW265": "Sanger Sequencing", "UHW270": "Long-read Sequence Analysis", "UHW280": "Sequence Quality Control", "UHW290": "LC-MS-MS", "UHW300": "LC-MS", "UHW310": "HPLC", "UHW320": "UPLC", "UHW330": "GC", "UHW340": "GC-MS", "UHW350": "GC-MS-MS", "UHW355": "SPE-MS-MS", "UHW360": "FPLC", "UHW365": "Rapid Sugar Analyzer", "UHW370": "Oligomer Synthesis", "UHW380": "Microplate Reading", "UHW390": "Microscopy Imaging", "UHW400": "Manual",
-    "USW005": "Biological Database", "USW010": "DNA Oligomer Pool Design", "USW020": "Primer Design", "USW030": "Vector Design", "USW040": "Sequence Optimization", "USW050": "Synthesis Screening", "USW060": "Structure-based Sequence Generation", "USW070": "Protein Structure Prediction", "USW080": "Protein Structure Generation", "USW090": "Retrosynthetic Pathway Design", "USW100": "Enzyme Identification", "USW110": "Sequence Alignment", "USW120": "Sequence Trimming and Filtering", "USW130": "Read Mapping and Alignment", "USW140": "Sequence Assembly", "USW145": "Metagenomic Assembly", "USW150": "Sequence Quality Control", "USW160": "Demultiplexing", "USW170": "Variant Calling", "USW180": "RNA-Seq Analysis", "USW185": "Gene Set Enrichment Analysis", "USW190": "Proteomics Data Analysis", "USW200": "Phylogenetic Analysis", "USW210": "Metabolic Flux Analysis", "USW220": "Deep Learning Data Preparation", "USW230": "Sequence Embedding", "USW240": "Deep Learning Model Training", "USW250": "Model Evaluation", "USW260": "Hyperparameter Tuning", "USW270": "Model Deployment", "USW280": "Monitoring and Reporting", "USW290": "Phenotype Data Preprocessing", "USW300": "XCMS Analysis", "USW310": "Flow Cytometry Analysis", "USW320": "DNA Assembly Simulation", "USW325": "Gene Editing Simulation", "USW330": "Well Plate Mapping", "USW340": "Computation"
-};
-
-
-export function activate(context: vscode.ExtensionContext) {
-    console.log("--- LabNote AI Extension v0.7 (Robust Context Finder) ACTIVATED ---");
-    process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
-
-    const outputChannel = vscode.window.createOutputChannel("LabNote AI");
-    outputChannel.appendLine("LabNote AI extension is now active.");
-    // 1. 연구노트 뼈대 생성 명령어
-    const generateDisposable = vscode.commands.registerCommand('labnote.ai.generate', async () => {
-        const userInput = await vscode.window.showInputBox({
-            prompt: '생성할 연구노트의 핵심 내용을 입력하세요.',
-            placeHolder: '예: Golden Gate Assembly 이용한 플라스미드 제작'
-        });
-        if (userInput) await interactiveGenerateFlow(userInput, outputChannel);
-    });
-    // 2. 섹션별 내용 채우기 명령어 (populateSectionFlow에 메인 `context`를 전달)
-    const populateDisposable = vscode.commands.registerCommand('labnote.ai.populateSection', async () => {
-        await populateSectionFlow(context, outputChannel);
-    });
-
-    const chatDisposable = vscode.commands.registerCommand('labnote.ai.chat', async () => {
-        const userInput = await vscode.window.showInputBox({
-            prompt: 'AI에게 질문할 내용을 입력하세요.',
-            placeHolder: '예: CRISPR-Cas9 시스템에 대해 설명해줘'
-        });
-        if (userInput) await callChatApi(userInput, outputChannel);
-    });
-
-    context.subscriptions.push(generateDisposable, populateDisposable, chatDisposable);
+// FileSystemProvider 인터페이스 및 구현
+export interface FsDirent {
+    name: string;
+    isDirectory(): boolean;
 }
 
-// --- 주요 기능 구현부 ---
+export interface FileSystemProvider {
+    exists(path: string): boolean;
+    mkdir(path: string): void;
+    readDir(path: string): FsDirent[];
+    readTextFile(path: string): string;
+    writeTextFile(path: string, content: string): void;
+}
+
+const realFsProvider: FileSystemProvider = {
+    exists: (p) => fs.existsSync(p),
+    mkdir: (p) => fs.mkdirSync(p, { recursive: true }),
+    readDir: (p) => fs.readdirSync(p, { withFileTypes: true }),
+    readTextFile: (p) => fs.readFileSync(p, 'utf-8'),
+    writeTextFile: (p, content) => fs.writeFileSync(p, content),
+};
+
+// --- 확장 프로그램 활성화 ---
+export function activate(context: vscode.ExtensionContext) {
+    const outputChannel = vscode.window.createOutputChannel("LabNote AI");
+    outputChannel.appendLine("LabNote AI/Manager extension is now active.");
+
+    // --- 템플릿 경로 관리 ---
+    const globalStoragePath = context.globalStorageUri.fsPath;
+    if (!realFsProvider.exists(globalStoragePath)) {
+        realFsProvider.mkdir(globalStoragePath);
+    }
+
+    const copyResourceFileToGlobalStorage = (fileName: string) => {
+        const globalPath = path.join(globalStoragePath, fileName);
+        if (!realFsProvider.exists(globalPath)) {
+            const bundledPath = path.join(context.extensionPath, 'resources', fileName);
+            if (realFsProvider.exists(bundledPath)) {
+                const defaultContent = realFsProvider.readTextFile(bundledPath);
+                realFsProvider.writeTextFile(globalPath, defaultContent);
+            }
+        }
+        return globalPath;
+    };
+
+    const resolveConfiguredPath = (settingKey: string, defaultFileName: string): string => {
+        const config = vscode.workspace.getConfiguration('labnote.manager');
+        let configured = (config.get<string>(settingKey) || '').trim();
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
+
+        if (configured) {
+            if (workspaceRoot) {
+                configured = configured.replace(/\$\{workspaceFolder\}/g, workspaceRoot);
+            }
+            if (workspaceRoot && !path.isAbsolute(configured)) {
+                configured = path.join(workspaceRoot, configured);
+            }
+            if (fs.existsSync(configured)) {
+                return configured;
+            } else {
+                vscode.window.showWarningMessage(`[Labnote Manager] 설정된 경로를 찾을 수 없어 기본 템플릿으로 대체합니다: ${configured}`);
+            }
+        }
+        return copyResourceFileToGlobalStorage(defaultFileName);
+    };
+
+    const customWorkflowsPath = resolveConfiguredPath('workflowsPath', 'workflows_en.md');
+    const customHwUoPath = resolveConfiguredPath('hwUnitOperationsPath', 'unitoperations_hw_en.md');
+    const customSwUoPath = resolveConfiguredPath('swUnitOperationsPath', 'unitoperations_sw_en.md');
+
+    // --- 명령어 등록 ---
+    context.subscriptions.push(
+        // AI Commands
+        vscode.commands.registerCommand('labnote.ai.generate', async () => {
+             const userInput = await vscode.window.showInputBox({
+                prompt: '생성할 연구노트의 핵심 내용을 입력하세요.',
+                placeHolder: '예: Golden Gate Assembly 이용한 플라스미드 제작'
+            });
+            if (userInput) await interactiveGenerateFlow(userInput, outputChannel);
+        }),
+        vscode.commands.registerCommand('labnote.ai.populateSection', () => populateSectionFlow(context, outputChannel)),
+        vscode.commands.registerCommand('labnote.ai.chat', async () => {
+             const userInput = await vscode.window.showInputBox({
+                prompt: 'AI에게 질문할 내용을 입력하세요.',
+                placeHolder: '예: CRISPR-Cas9 시스템에 대해 설명해줘'
+            });
+            if (userInput) await callChatApi(userInput, outputChannel);
+        }),
+
+        // Manager Commands
+        vscode.commands.registerCommand('labnote.manager.newWorkflow', async () => {
+            try {
+                const activeUri = getActiveFileUri();
+                if (!activeUri) {
+                    vscode.window.showErrorMessage("활성화된 편집기(editor)가 없습니다.");
+                    return;
+                }
+                const readmePath = activeUri.fsPath;
+                if (!logic.isValidReadmePath(readmePath)) {
+                    vscode.window.showErrorMessage("이 명령어는 'labnote/<번호>_주제/README.md' 파일에서만 실행할 수 있습니다.");
+                    return;
+                }
+
+                const customWorkflowsContent = realFsProvider.readTextFile(customWorkflowsPath);
+                const workflowItems = logic.parseWorkflows(customWorkflowsContent);
+
+                const selectedWorkflow = await vscode.window.showQuickPick(workflowItems, { placeHolder: "Select a standard workflow" });
+                if (!selectedWorkflow) return;
+
+                const description = await vscode.window.showInputBox({ prompt: `Enter a specific description for "${selectedWorkflow.label}"` });
+                if (description === undefined) return;
+
+                const result = logic.createNewWorkflow(realFsProvider, readmePath, selectedWorkflow, description);
+
+                const readmeUri = vscode.Uri.file(readmePath);
+                const doc = await vscode.workspace.openTextDocument(readmeUri);
+                const insertPos = findInsertPosBeforeEndMarker(doc, 'WORKFLOW_LIST_END');
+                const we = new vscode.WorkspaceEdit();
+                we.insert(readmeUri, insertPos, result.textToInsert);
+                await vscode.workspace.applyEdit(we);
+                await doc.save();
+
+                vscode.window.showInformationMessage(`워크플로 '${path.basename(result.workflowFilePath)}'가 생성되었습니다.`);
+            } catch (error: unknown) {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                vscode.window.showErrorMessage(`[New Workflow] 오류: ${errorMessage}`);
+            }
+        }),
+        vscode.commands.registerCommand('labnote.manager.newHwUnitOperation', createUnitOperationCommand(realFsProvider, customHwUoPath)),
+        vscode.commands.registerCommand('labnote.manager.newSwUnitOperation', createUnitOperationCommand(realFsProvider, customSwUoPath)),
+        vscode.commands.registerCommand('labnote.manager.manageTemplates', async () => {
+            const template = await vscode.window.showQuickPick(
+                logic.getManagableTemplates({
+                    workflows: customWorkflowsPath,
+                    hwUnitOperations: customHwUoPath,
+                    swUnitOperations: customSwUoPath,
+                }), 
+                { placeHolder: 'Select a template file to manage' }
+            );
+
+            if (!template) return;
+
+            const action = await vscode.window.showQuickPick(
+                [
+                    { label: 'Edit File', description: 'Open the file for manual editing' },
+                    { label: 'Reset to Default', description: 'Overwrite with the extension\'s default version' },
+                    { label: 'Reveal File Location', description: 'Show the file in your file explorer' },
+                    { label: 'Import from File...', description: 'Overwrite with an external file' },
+                ],
+                { placeHolder: `Select an action for '${template.label}'` }
+            );
+
+            if (!action) return;
+
+            try {
+                switch (action.label) {
+                    case 'Edit File':
+                        await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(template.filePath));
+                        break;
+                    case 'Reset to Default':
+                        const confirmation = await vscode.window.showWarningMessage(
+                            `Are you sure you want to reset '${template.label}' to default? All your changes will be lost.`,
+                            { modal: true },
+                            'Yes, reset'
+                        );
+                        if (confirmation === 'Yes, reset') {
+                            const bundledPath = path.join(context.extensionPath, 'resources', path.basename(template.filePath));
+                            const defaultContent = realFsProvider.readTextFile(bundledPath);
+                            realFsProvider.writeTextFile(template.filePath, defaultContent);
+                            vscode.window.showInformationMessage(`'${template.label}' has been reset to default.`);
+                        }
+                        break;
+                    case 'Reveal File Location':
+                        await vscode.env.openExternal(vscode.Uri.file(path.dirname(template.filePath)));
+                        break;
+                    case 'Import from File...':
+                        const options: vscode.OpenDialogOptions = {
+                            canSelectMany: false,
+                            openLabel: 'Import',
+                            filters: { 'Markdown files': ['md'] }
+                        };
+                        const fileUri = await vscode.window.showOpenDialog(options);
+                        if (fileUri && fileUri[0]) {
+                            const importedContent = realFsProvider.readTextFile(fileUri[0].fsPath);
+                            realFsProvider.writeTextFile(template.filePath, importedContent);
+                            vscode.window.showInformationMessage(`'${template.label}' imported successfully.`);
+                        }
+                        break;
+                }
+            } catch (error: unknown) {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                vscode.window.showErrorMessage(`Error managing '${template.label}': ${errorMessage}`);
+            }
+        })
+    );
+}
+
+export function deactivate() {}
+
+// --- Helper Functions ---
+
+function getActiveFileUri(): vscode.Uri | null {
+    const editor = vscode.window.activeTextEditor;
+    if (editor) return editor.document.uri;
+    const activeTab = vscode.window.tabGroups.activeTabGroup?.activeTab;
+    const input = activeTab?.input as unknown;
+    if (!input) return null;
+    if (input instanceof vscode.TabInputText) return input.uri;
+    if (input instanceof vscode.TabInputTextDiff) return input.modified;
+    if (typeof input === 'object' && input !== null && 'uri' in (input as Record<string, unknown>)) {
+        return (input as { uri: vscode.Uri }).uri;
+    }
+    return null;
+}
+
+function findInsertPosBeforeEndMarker(doc: vscode.TextDocument, endMarker: string): vscode.Position {
+    for (let i = doc.lineCount - 1; i >= 0; i--) {
+        const line = doc.lineAt(i);
+        if (line.text.includes(endMarker)) {
+            // 주석 바로 위 줄의 끝에 삽입
+            return new vscode.Position(i > 0 ? i - 1 : 0, doc.lineAt(Math.max(0, i - 1)).text.length);
+        }
+    }
+    return new vscode.Position(doc.lineCount, 0); // 찾지 못하면 맨 끝
+}
+
+
+function createUnitOperationCommand(fsProvider: FileSystemProvider, uoFilePath: string): () => Promise<void> {
+    return async () => {
+        const activeUri = getActiveFileUri();
+        if (!activeUri) {
+            vscode.window.showErrorMessage("활성화된 편집기(editor)가 없습니다.");
+            return;
+        }
+        if (!logic.isValidWorkflowPath(activeUri.fsPath)) {
+            vscode.window.showErrorMessage("이 명령어는 'labnote' 실험 폴더 내의 워크플로 파일에서만 실행할 수 있습니다.");
+            return;
+        }
+
+        try {
+            const uoContent = fsProvider.readTextFile(uoFilePath);
+            const uoItems = logic.parseUnitOperations(uoContent);
+
+            const selectedUo = await vscode.window.showQuickPick(uoItems, { placeHolder: "Select a Unit Operation" });
+            if (!selectedUo) return;
+
+            const userDescription = await vscode.window.showInputBox({ prompt: `Enter a specific description for "${selectedUo.name}"` });
+            if (userDescription === undefined) return;
+
+            const workflowDir = path.dirname(activeUri.fsPath);
+            const readmePath = path.join(path.dirname(workflowDir), 'README.md');
+            
+            let experimenter = '';
+            if (fsProvider.exists(readmePath)) {
+                 const readmeContent = fsProvider.readTextFile(readmePath);
+                 const parsedFrontMatter = logic.parseReadmeFrontMatter(readmeContent);
+                 experimenter = parsedFrontMatter?.author || '';
+            }
+
+            const textToInsert = logic.createUnitOperationContent(selectedUo, userDescription, new Date(), experimenter);
+            const wfDoc = await vscode.workspace.openTextDocument(activeUri);
+            const pos = findInsertPosBeforeEndMarker(wfDoc, 'UNITOPERATION_LIST_END');
+            const we = new vscode.WorkspaceEdit();
+            we.insert(activeUri, pos, textToInsert);
+            await vscode.workspace.applyEdit(we);
+        } catch (error: unknown) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            vscode.window.showErrorMessage(`Error creating Unit Operation: ${errorMessage}`);
+        }
+    };
+}
+
+
+// --- AI Feature Implementations ---
+
+async function interactiveGenerateFlow(userInput: string, outputChannel: vscode.OutputChannel) {
+    await vscode.window.withProgress({
+        location: vscode.ProgressLocation.Notification,
+        title: "LabNote AI 분석 중...",
+        cancellable: true
+    }, async (progress) => {
+        try {
+            const workspaceFolders = vscode.workspace.workspaceFolders;
+            if (!workspaceFolders) {
+                vscode.window.showErrorMessage("실험 노트를 생성하려면 먼저 작업 영역(workspace)을 열어주세요.");
+                return;
+            }
+            const rootPath = workspaceFolders[0].uri.fsPath;
+            const labnotesRoot = path.join(rootPath, 'labnotes');
+
+            if (!fs.existsSync(labnotesRoot)) {
+                fs.mkdirSync(labnotesRoot);
+            }
+
+            const entries = fs.readdirSync(labnotesRoot, { withFileTypes: true });
+            const existingDirs = entries
+                .filter(e => e.isDirectory() && /^\d{3}_/.test(e.name))
+                .map(e => parseInt(e.name.substring(0, 3), 10));
+            
+            const nextId = existingDirs.length > 0 ? Math.max(...existingDirs) + 1 : 1;
+            const formattedId = nextId.toString().padStart(3, '0');
+            const safeTitle = userInput.replace(/\s+/g, '_');
+            const newDirName = `${formattedId}_${safeTitle}`;
+            const newDirPath = path.join(labnotesRoot, newDirName);
+
+            fs.mkdirSync(newDirPath, { recursive: true });
+            fs.mkdirSync(path.join(newDirPath, 'images'), { recursive: true });
+            fs.mkdirSync(path.join(newDirPath, 'resources'), { recursive: true });
+
+            outputChannel.appendLine(`[Info] Created new experiment folder: ${newDirPath}`);
+
+            progress.report({ increment: 10, message: "실험 구조 분석 중..." });
+            const config = vscode.workspace.getConfiguration('labnote.ai');
+            const baseUrl = config.get<string>('backendUrl');
+            if (!baseUrl) throw new Error("Backend URL이 설정되지 않았습니다.");
+
+            // AI 호출 대신 수동 선택 메뉴 사용
+            const { ALL_WORKFLOWS, ALL_UOS } = await fetchConstants(baseUrl, outputChannel);
+            const finalWorkflowId = await showWorkflowSelectionMenu(ALL_WORKFLOWS);
+            if (!finalWorkflowId) return;
+
+            const finalUoIds = await showUnifiedUoSelectionMenu(ALL_UOS, []);
+            if (!finalUoIds || finalUoIds.length === 0) return;
+            
+            progress.report({ increment: 60, message: "연구노트 및 워크플로우 파일 생성 중..." });
+
+            const createScaffoldResponse = await fetch(`${baseUrl}/create_scaffold`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ query: userInput, workflow_id: finalWorkflowId, unit_operation_ids: finalUoIds, experimenter: "AI Assistant" }),
+            });
+            if (!createScaffoldResponse.ok) throw new Error(`뼈대 생성 실패 (HTTP ${createScaffoldResponse.status}): ${await createScaffoldResponse.text()}`);
+            
+            const scaffoldData = await createScaffoldResponse.json() as { files: Record<string, string> };
+
+            progress.report({ increment: 90, message: "파일 저장 및 표시 중..." });
+            
+            for (const fileName in scaffoldData.files) {
+                if (Object.prototype.hasOwnProperty.call(scaffoldData.files, fileName)) {
+                    const content = scaffoldData.files[fileName];
+                    const filePath = path.join(newDirPath, fileName);
+                    fs.writeFileSync(filePath, content);
+                    outputChannel.appendLine(`[Success] Created file: ${filePath}`);
+                }
+            }
+
+            const readmePath = path.join(newDirPath, 'README.md');
+            const doc = await vscode.workspace.openTextDocument(readmePath);
+            await vscode.window.showTextDocument(doc, { preview: false });
+
+            vscode.window.showInformationMessage(`연구노트 '${newDirName}' 및 관련 워크플로우 파일들이 생성되었습니다.`);
+            outputChannel.show(true);
+
+        } catch (error: any) {
+            vscode.window.showErrorMessage('LabNote AI 작업 중 오류가 발생했습니다. 자세한 내용은 출력 채널을 확인하세요.');
+            outputChannel.appendLine(`[ERROR] ${error.message}`);
+            outputChannel.show(true);
+        }
+    });
+}
 
 async function populateSectionFlow(extensionContext: vscode.ExtensionContext, outputChannel: vscode.OutputChannel) {
     const editor = vscode.window.activeTextEditor;
@@ -73,7 +386,6 @@ async function populateSectionFlow(extensionContext: vscode.ExtensionContext, ou
     }
 
     try {
-        // 1. 현재 커서 위치에서 컨텍스트(UO, 섹션, 주제) 파싱
         const sectionContext = findSectionContext(editor.document, editor.selection.active);
         if (!sectionContext) {
             vscode.window.showErrorMessage("현재 커서가 위치한 곳에서 채울 수 있는 Unit Operation 섹션(과 플레이스홀더)을 찾을 수 없습니다.");
@@ -82,12 +394,12 @@ async function populateSectionFlow(extensionContext: vscode.ExtensionContext, ou
 
         const { uoId, section, query, fileContent, placeholderRange } = sectionContext;
         outputChannel.appendLine(`[Action] Populate section request for UO '${uoId}', Section '${section}'`);
-        // 2. 프로그레스 바 표시 및 API 호출
+        
         await vscode.window.withProgress({
             location: vscode.ProgressLocation.Notification,
             title: `LabNote AI: '${section}' 섹션 생성 중...`,
             cancellable: true
-        }, async (progress, token) => {
+        }, async (progress) => {
             progress.report({ increment: 20, message: "AI 에이전트 팀 호출 중..." });
 
             const config = vscode.workspace.getConfiguration('labnote.ai');
@@ -121,12 +433,7 @@ async function populateSectionFlow(extensionContext: vscode.ExtensionContext, ou
                         }
 
                         const chosenTextWithAttribution = populateData.options[chosenIndex];
-                        // 모델명 및 참고 SOP 정보 제거
-                        let chosenText = chosenTextWithAttribution;
-                        // 모델명 헤더 제거
-                        chosenText = chosenText.replace(/^---\s*.*의 제안\s*---\s*\n\n/, ''); 
-                        // 참고 SOP 정보 제거
-                        chosenText = chosenText.replace(/\[참고 SOP:.*?\]\s*$/, '').trim(); 
+                        let chosenText = chosenTextWithAttribution.replace(/^---\s*.*의 제안\s*---\s*\n\n/, '').replace(/\[참고 SOP:.*?\]\s*$/, '').trim();
                         
                         const rejectedOptions = populateData.options.filter((_, index) => index !== chosenIndex);
 
@@ -140,7 +447,7 @@ async function populateSectionFlow(extensionContext: vscode.ExtensionContext, ou
                             body: JSON.stringify({ 
                                 uo_id: uoId, 
                                 section, 
-                                chosen: chosenText, // Attribution이 제거된 텍스트로 기록
+                                chosen: chosenText, 
                                 rejected: rejectedOptions, 
                                 query,
                                 file_content: editor.document.getText()
@@ -164,6 +471,45 @@ async function populateSectionFlow(extensionContext: vscode.ExtensionContext, ou
     }
 }
 
+async function callChatApi(userInput: string, outputChannel: vscode.OutputChannel) {
+    await vscode.window.withProgress({
+        location: vscode.ProgressLocation.Notification,
+        title: "LabNote AI가 응답 중입니다...",
+        cancellable: false
+    }, async (progress) => {
+        try {
+            progress.report({ increment: 20, message: "AI에게 질문하는 중..." });
+            const config = vscode.workspace.getConfiguration('labnote.ai');
+            const baseUrl = config.get<string>('backendUrl');
+            if (!baseUrl) throw new Error("Backend URL이 설정되지 않았습니다.");
+            
+            const response = await fetch(`${baseUrl}/chat`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ query: userInput }),
+            });
+
+            if (!response.ok) {
+                const errorBody = await response.text();
+                throw new Error(`채팅 실패 (HTTP ${response.status}): ${errorBody}`);
+            }
+            const chatData = await response.json() as ChatResponse;
+
+            const doc = await vscode.workspace.openTextDocument({
+                content: `# AI 답변: ${userInput}\n\n---\n\n${chatData.response}`,
+                language: 'markdown'
+            });
+            await vscode.window.showTextDocument(doc, { preview: false });
+
+        } catch (error: any) {
+            vscode.window.showErrorMessage('LabNote AI와 대화 중 오류가 발생했습니다.');
+            outputChannel.appendLine(`[ERROR] ${error.message}`);
+            outputChannel.show(true);
+        }
+    });
+}
+// --- Webview and Context Finding Functions ---
+
 function createPopulateWebviewPanel(section: string, options: string[]): vscode.WebviewPanel {
     const panel = vscode.window.createWebviewPanel(
         'labnoteAiPopulate', `AI 제안: ${section}`, vscode.ViewColumn.Beside,
@@ -172,13 +518,11 @@ function createPopulateWebviewPanel(section: string, options: string[]): vscode.
     panel.webview.html = getWebviewContent(section, options);
     return panel;
 }
-// --- Webview HTML 내용 생성 함수 ---
+
 function getWebviewContent(section: string, options: string[]): string {
     const optionCards = options.map((option, index) => {
-        const optionTitles = ["간결한 버전 📜", "상세한 버전 🔬", "대안/고려사항 🤔"];
-        const title = optionTitles[index] || `옵션 ${index + 1}`;
         const escapedOption = option.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
-        return `<div class="option-card" data-index="${index}"><h3>${title}</h3><pre><code>${escapedOption}</code></pre></div>`;
+        return `<div class="option-card" data-index="${index}"><pre><code>${escapedOption}</code></pre></div>`;
     }).join('');
 
     return `<!DOCTYPE html>
@@ -224,18 +568,11 @@ function getWebviewContent(section: string, options: string[]): string {
     </html>`;
 }
 
-/**
- * ✨ [개선된 로직]
- * 현재 커서 위치를 기반으로 상위의 섹션(####)과 Unit Operation(###)을 찾고,
- * 그 섹션 내에 교체할 플레이스홀더 라인이 있는지 다시 탐색하여 컨텍스트를 확정합니다.
- * 이를 통해 사용자는 섹션 내 아무 곳에나 커서를 두고 명령을 실행할 수 있습니다.
- */
 function findSectionContext(document: vscode.TextDocument, position: vscode.Position): SectionContext | null {
     let currentSection = "";
     let currentUoId = "";
     let sectionLineNum = -1;
 
-    // 1. 현재 커서 위치에서 위로 올라가며 가장 가까운 '섹션' 헤더(####)를 찾습니다.
     for (let i = position.line; i >= 0; i--) {
         const lineText = document.lineAt(i).text;
         const sectionMatch = lineText.match(/^####\s*([A-Za-z\s&]+)/);
@@ -245,9 +582,8 @@ function findSectionContext(document: vscode.TextDocument, position: vscode.Posi
             break;
         }
     }
-    if (!currentSection) return null; // 문서에서 섹션을 찾지 못함
+    if (!currentSection) return null;
 
-    // 2. 찾은 섹션 위치에서 다시 위로 올라가며 가장 가까운 'Unit Operation' 헤더(###)를 찾습니다.
     for (let i = sectionLineNum - 1; i >= 0; i--) {
         const lineText = document.lineAt(i).text;
         const uoMatch = lineText.match(/^###\s*\[(U[A-Z]{2,3}\d{3})/);
@@ -256,28 +592,24 @@ function findSectionContext(document: vscode.TextDocument, position: vscode.Posi
             break;
         }
     }
-    if (!currentUoId) return null; // 섹션에 대한 UO를 찾지 못함
+    if (!currentUoId) return null;
 
-    // 3. 찾은 섹션 내부를 탐색하여 교체할 '플레이스홀더' 라인을 찾습니다.
     const placeholderRegex = /^\s*(-\s*)?\(.*\)\s*$/;
     let placeholderRange: vscode.Range | null = null;
     
-    // 섹션 시작 다음 줄부터 탐색 시작
     for (let i = sectionLineNum + 1; i < document.lineCount; i++) {
         const line = document.lineAt(i);
-        // 다른 헤더(### 또는 ####)를 만나면 현재 섹션이 끝난 것이므로 탐색 중지
         if (line.text.startsWith('###') || line.text.startsWith('####')) {
             break;
         }
         if (placeholderRegex.test(line.text)) {
             placeholderRange = line.range;
-            break; // 첫 번째로 발견된 플레이스홀더를 대상으로 함
+            break; 
         }
     }
     
-    if (!placeholderRange) return null; // 현재 섹션 내에 채울 플레이스홀더가 없음
+    if (!placeholderRange) return null;
 
-    // 4. YAML frontmatter에서 title(query)을 찾습니다.
     const text = document.getText();
     const yamlMatch = text.match(/^---\s*[\r\n]+title:\s*["']?(.*?)["']?[\r\n]+/);
     const query = yamlMatch ? yamlMatch[1].replace(/\[AI Generated\]\s*/, '').trim() : "Untitled Experiment";
@@ -285,152 +617,45 @@ function findSectionContext(document: vscode.TextDocument, position: vscode.Posi
     return { uoId: currentUoId, section: currentSection, query, fileContent: text, placeholderRange };
 }
 
-
-// interactiveGenerateFlow, showWorkflowSelectionMenu, showUnifiedUoSelectionMenu, callChatApi 함수는 기존과 동일합니다.
-async function interactiveGenerateFlow(userInput: string, outputChannel: vscode.OutputChannel) {
-    await vscode.window.withProgress({
-        location: vscode.ProgressLocation.Notification,
-        title: "LabNote AI 분석 중...",
-        cancellable: true
-    }, async (progress, token) => {
-        try {
-            // --- 파일 및 폴더 생성 로직 ---
-            
-            const workspaceFolders = vscode.workspace.workspaceFolders;
-            if (!workspaceFolders) {
-                vscode.window.showErrorMessage("실험 노트를 생성하려면 먼저 작업 영역(workspace)을 열어주세요.");
-                return;
-            }
-            const rootPath = workspaceFolders[0].uri.fsPath;
-            const labnotesRoot = path.join(rootPath, 'labnotes'); // 'labnotes' 폴더를 기준으로 설정
-
-            // 1. 'labnotes' 폴더가 없으면 생성
-            if (!fs.existsSync(labnotesRoot)) {
-                fs.mkdirSync(labnotesRoot);
-            }
-
-            // 2. 다음 실험 번호 계산
-            const entries = fs.readdirSync(labnotesRoot, { withFileTypes: true });
-            const existingDirs = entries
-                .filter(e => e.isDirectory() && /^\d{3}_/.test(e.name))
-                .map(e => parseInt(e.name.substring(0, 3), 10));
-            
-            const nextId = existingDirs.length > 0 ? Math.max(...existingDirs) + 1 : 1;
-            const formattedId = nextId.toString().padStart(3, '0');
-            const safeTitle = userInput.replace(/\s+/g, '_');
-            const newDirName = `${formattedId}_${safeTitle}`;
-            const newDirPath = path.join(labnotesRoot, newDirName);
-
-            // 3. 번호가 매겨진 새 폴더 및 하위 폴더 생성
-            fs.mkdirSync(newDirPath, { recursive: true });
-            fs.mkdirSync(path.join(newDirPath, 'images'), { recursive: true });
-            fs.mkdirSync(path.join(newDirPath, 'resources'), { recursive: true });
-
-            outputChannel.appendLine(`[Info] Created new experiment folder: ${newDirPath}`);
-
-            progress.report({ increment: 10, message: "실험 구조를 분석하고 추천받는 중..." });
-            const config = vscode.workspace.getConfiguration('labnote.ai');
-            const baseUrl = config.get<string>('backendUrl');
-            if (!baseUrl) throw new Error("Backend URL이 설정되지 않았습니다.");
-
-            const finalWorkflowId = await showWorkflowSelectionMenu();
-            if (!finalWorkflowId) { return; }
-            outputChannel.appendLine(`[User Action] 최종 선택된 WF: ${finalWorkflowId}`);
-
-            const finalUoIds = await showUnifiedUoSelectionMenu([]);
-            if (finalUoIds === undefined || finalUoIds.length === 0) { return; }
-            outputChannel.appendLine(`[User Action] 최종 선택된 UOs: ${finalUoIds.join(', ')}`);
-            
-            progress.report({ increment: 60, message: "연구노트 뼈대 생성 중..." });
-
-            const createScaffoldResponse = await fetch(`${baseUrl}/create_scaffold`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ query: userInput, workflow_id: finalWorkflowId, unit_operation_ids: finalUoIds, experimenter: "AI Assistant" }),
-                timeout: 300000
-            });
-            if (!createScaffoldResponse.ok) throw new Error(`뼈대 생성 실패 (HTTP ${createScaffoldResponse.status}): ${await createScaffoldResponse.text()}`);
-            
-            const scaffoldData = await createScaffoldResponse.json() as LabNoteResponse;
-
-            progress.report({ increment: 90, message: "결과 표시 중..." });
-            
-            // --- 생성된 내용을 새 폴더 안의 파일에 저장하고 열기 ---
-            const newFilePath = path.join(newDirPath, 'README.md');
-            fs.writeFileSync(newFilePath, scaffoldData.response);
-
-            const doc = await vscode.workspace.openTextDocument(newFilePath);
-            await vscode.window.showTextDocument(doc, { preview: false });
-            outputChannel.appendLine(`[Success] 랩노트 생성이 완료되었습니다.`);
-            outputChannel.show(true);
-
-        } catch (error: any) {
-            vscode.window.showErrorMessage('LabNote AI 작업 중 오류가 발생했습니다. 자세한 내용은 출력 채널을 확인하세요.');
-            outputChannel.appendLine(`[ERROR] ${error.message}`);
-            outputChannel.show(true);
+// --- Menu Functions ---
+async function fetchConstants(baseUrl: string, outputChannel: vscode.OutputChannel): Promise<{ ALL_WORKFLOWS: { [id: string]: string }, ALL_UOS: { [id: string]: string } }> {
+    try {
+        const response = await fetch(`${baseUrl}/constants`);
+        if (!response.ok) {
+            throw new Error(`상수 fetch 실패 (HTTP ${response.status})`);
         }
-    });
+        return await response.json();
+    } catch (e: any) {
+        outputChannel.appendLine(`[Error] 백엔드에서 상수를 가져올 수 없습니다: ${e.message}. 로컬 폴백을 사용합니다.`);
+        // 백엔드 사용 불가 시 최소한의 폴백 반환
+        return {
+            ALL_WORKFLOWS: { "WD070": "Vector Design" },
+            ALL_UOS: { "UHW400": "Manual" }
+        };
+    }
 }
 
-async function showWorkflowSelectionMenu(): Promise<string | undefined> {
-    const allWorkflowItems = Object.keys(ALL_WORKFLOWS).map(id => ({ id: id, label: `[${id}]`, description: ALL_WORKFLOWS[id] }));
-    const selectedItem = await vscode.window.showQuickPick(allWorkflowItems, { title: '사용할 워크플로우(Workflow) 선택', matchOnDescription: true, placeHolder: '이름이나 ID로 검색...' });
+async function showWorkflowSelectionMenu(workflows: { [id: string]: string }): Promise<string | undefined> {
+    const allWorkflowItems = Object.keys(workflows).map(id => ({ id: id, label: `[${id}]`, description: workflows[id] }));
+    const selectedItem = await vscode.window.showQuickPick(allWorkflowItems, { title: '워크플로우 선택', matchOnDescription: true, placeHolder: '이름이나 ID로 검색...' });
     return selectedItem?.id;
 }
 
-async function showUnifiedUoSelectionMenu(recommendedIds: string[]): Promise<string[] | undefined> {
+async function showUnifiedUoSelectionMenu(uos: { [id: string]: string }, recommendedIds: string[]): Promise<string[] | undefined> {
     const recommendedSet = new Set(recommendedIds);
-    const allUoItems: UnitOperationQuickPickItem[] = Object.keys(ALL_UOS).map(id => ({ id: id, label: `[${id}]`, description: ALL_UOS[id], picked: recommendedSet.has(id) }));
+    const allUoItems = Object.keys(uos).map(id => ({ id: id, label: `[${id}]`, description: uos[id], picked: recommendedSet.has(id) }));
     allUoItems.sort((a, b) => {
         const aIsRecommended = recommendedSet.has(a.id);
         const bIsRecommended = recommendedSet.has(b.id);
         if (aIsRecommended && !bIsRecommended) return -1;
         if (!aIsRecommended && bIsRecommended) return 1;
-        if (!aIsRecommended && !bIsRecommended) { return a.id.localeCompare(b.id); }
-        return 0;
+        return a.id.localeCompare(b.id);
     });
-    const selectedItems = await vscode.window.showQuickPick(allUoItems, { title: '사용할 Unit Operation 선택 (AI 추천 항목이 미리 선택됨)', canPickMany: true, matchOnDescription: true, placeHolder: '이름이나 ID로 검색하여 선택/해제 후 Enter', });
+    const selectedItems = await vscode.window.showQuickPick(allUoItems, { 
+        title: 'Unit Operation 선택 (AI 추천 항목이 미리 선택됨)', 
+        canPickMany: true, 
+        matchOnDescription: true, 
+        placeHolder: '이름이나 ID로 검색하여 선택/해제 후 Enter', 
+    });
     return selectedItems?.map(item => item.id);
 }
-
-
-async function callChatApi(userInput: string, outputChannel: vscode.OutputChannel) {
-    await vscode.window.withProgress({
-        location: vscode.ProgressLocation.Notification,
-        title: "LabNote AI가 응답 중입니다...",
-        cancellable: false
-    }, async (progress) => {
-        try {
-            progress.report({ increment: 20, message: "AI에게 질문하는 중..." });
-            const config = vscode.workspace.getConfiguration('labnote.ai');
-            const baseUrl = config.get<string>('backendUrl');
-            if (!baseUrl) throw new Error("Backend URL이 설정되지 않았습니다.");
-            
-            const response = await fetch(`${baseUrl}/chat`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ query: userInput }),
-                timeout: 180000
-            });
-
-            if (!response.ok) {
-                const errorBody = await response.text();
-                throw new Error(`채팅 실패 (HTTP ${response.status}): ${errorBody}`);
-            }
-            const chatData = await response.json() as ChatResponse;
-
-            const doc = await vscode.workspace.openTextDocument({
-                content: `# AI 답변: ${userInput}\n\n---\n\n${chatData.response}`,
-                language: 'markdown'
-            });
-            await vscode.window.showTextDocument(doc, { preview: false });
-
-        } catch (error: any) {
-            vscode.window.showErrorMessage('LabNote AI와 대화 중 오류가 발생했습니다.');
-            outputChannel.appendLine(`[ERROR] ${error.message}`);
-            outputChannel.show(true);
-        }
-    });
-}
-
-export function deactivate() {}

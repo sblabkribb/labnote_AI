@@ -236,7 +236,7 @@ class CreateScaffoldRequest(BaseModel):
     experimenter: Optional[str] = "AI Assistant"
 
 class LabNoteResponse(BaseModel):
-    response: str
+    files: Dict[str, str]
 
 class PopulateNoteRequest(BaseModel):
     file_content: str
@@ -307,30 +307,69 @@ def _extract_section_content(uo_block: str, section_name: str) -> str:
 
 @app.post("/create_scaffold", response_model=LabNoteResponse)
 async def create_scaffold(request: CreateScaffoldRequest):
-    logger.info(f"Phase 1: Creating scaffold for WF: {request.workflow_id}")
+    logger.info(f"Phase 1: Creating multi-file scaffold for WF: {request.workflow_id}")
     try:
         wf_name = ALL_WORKFLOWS_DATA.get(request.workflow_id, "Custom Workflow")
         
-        uo_templates = [
-            create_unit_operation_template(uo_id, ALL_UOS_DATA.get(uo_id, "Unknown Operation"), request.experimenter)
-            for uo_id in request.unit_operation_ids
-        ]
+        # --- README.md 생성 ---
+        readme_title = request.query
+        readme_experimenter = request.experimenter
+        formatted_date = get_seoul_date_string()
+        
+        # 워크플로우 파일들의 링크를 미리 생성
+        workflow_links = []
+        for i, uo_id in enumerate(request.unit_operation_ids):
+            uo_name = ALL_UOS_DATA.get(uo_id, "Unknown Operation")
+            seq_string = str(i + 1).zfill(3)
+            # 파일명 규칙을 미리 정의 (확장 프로그램과 동일하게)
+            workflow_file_name = f"{seq_string}_{uo_id}_{uo_name.replace(' ', '_')}.md"
+            link_text = f"{seq_string} {uo_id} {uo_name}"
+            workflow_links.append(f"[ ] [{link_text}](./{workflow_file_name})")
 
-        final_note = f"""---
-title: "{request.query}"
-experimenter: {request.experimenter}
-created_date: '{get_seoul_date_string()}'
+        readme_content = f"""---
+title: "{readme_title}"
+experimenter: {readme_experimenter}
+created_date: '{formatted_date}'
+last_updated_date: '{formatted_date}'
+experiment_type: labnote
 ---
 
-## [{request.workflow_id} {wf_name}]
+## 🎯 실험 목표
+| 이 실험의 주된 목표와 가설을 간략하게 작성합니다.
+
+## 🗂️ 관련 워크플로
+{chr(10).join(workflow_links)}
+"""
+        
+        files_to_create = {"README.md": readme_content}
+
+        # --- 각 Unit Operation에 대한 워크플로우 .md 파일 생성 ---
+        for i, uo_id in enumerate(request.unit_operation_ids):
+            uo_name = ALL_UOS_DATA.get(uo_id, "Unknown Operation")
+            seq_string = str(i + 1).zfill(3)
+            workflow_file_name = f"{seq_string}_{uo_id}_{uo_name.replace(' ', '_')}.md"
+            
+            # 워크플로우 파일 내용 생성
+            workflow_title = f"{uo_id} {uo_name}"
+            workflow_body = f"""---
+title: "{workflow_title}"
+experimenter: {readme_experimenter}
+created_date: '{formatted_date}'
+last_updated_date: '{formatted_date}'
+---
+
+## [{workflow_title}]
 > (Workflow summary will be generated here)
 
 ## 🗂️ Relevant Unit Operations
-{''.join(uo_templates)}
+{create_unit_operation_template(uo_id, uo_name, readme_experimenter)}
 """
-        return LabNoteResponse(response=final_note)
+            files_to_create[workflow_file_name] = workflow_body
+
+        return LabNoteResponse(files=files_to_create)
+
     except Exception as e:
-        logger.error(f"Error during scaffold creation: {e}", exc_info=True)
+        logger.error(f"Error during multi-file scaffold creation: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error creating scaffold: {e}")
 
 @app.post("/populate_note", response_model=PopulateNoteResponse)

@@ -29,6 +29,22 @@
       {
         "command": "labnote.ai.chat",
         "title": "LabNote AI: 일반 대화 시작"
+      },
+      {
+        "command": "labnote.manager.newWorkflow",
+        "title": "LabNote Manager: 새 워크플로우 추가"
+      },
+      {
+        "command": "labnote.manager.newHwUnitOperation",
+        "title": "LabNote Manager: HW Unit Operation 추가"
+      },
+      {
+        "command": "labnote.manager.newSwUnitOperation",
+        "title": "LabNote Manager: SW Unit Operation 추가"
+      },
+      {
+        "command": "labnote.manager.manageTemplates",
+        "title": "LabNote Manager: 템플릿 관리"
       }
     ],
     "configuration": {
@@ -38,6 +54,21 @@
           "type": "string",
           "default": "http://123.37.5.184:30616",
           "description": "The base URL of the LabNote AI backend server (e.g., https://...vessl.ai)."
+        },
+        "labnote.manager.workflowsPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to your custom workflows markdown file. Leave empty to use the default."
+        },
+        "labnote.manager.hwUnitOperationsPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to your custom hardware unit operations markdown file. Leave empty to use the default."
+        },
+        "labnote.manager.swUnitOperationsPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to your custom software unit operations markdown file. Leave empty to use the default."
         }
       }
     }
