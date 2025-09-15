@@ -153,7 +153,9 @@
 
 ### 예시
 * **실험노트 생성**
-<video src="https://github.com/sblabkribb/labnote_AI/blob/main/images/%EC%8B%9C%EC%97%B0%EC%98%88%EC%8B%9C.mp4" controls="controls" muted="muted" loop="loop" playsinline="playsinline" style="max-width: 100%;">
+<video width="640" height="360" controls>
+  <source src="/images/시연예시.mp4" type="video/mp4">
+  Your browser does not support the video tag.
 </video>
 
 -----
