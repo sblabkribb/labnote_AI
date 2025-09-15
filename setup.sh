@@ -1,6 +1,5 @@
 #!/bin/bash
 # This script sets up the complete AI backend environment, including DPO training dependencies.
-# Version 5.1: Corrected Hugging Face repository IDs for both DPO and GGUF models.
 set -e
 
 # --- 1. System & Prerequisite Setup ---
@@ -93,6 +92,19 @@ EOF
 else
     echo ">>> Inference LLM '${INFERENCE_MODEL_NAME}' already exists."
 fi
+
+# --- 4.5. Additional LLM Setup ---
+echo ">>> (Step 4.5/6) Setting up additional LLM models..."
+ADDITIONAL_MODELS=("mixtral" "llama3:70b")
+for model in "${ADDITIONAL_MODELS[@]}"; do
+    if ! ollama list | grep -q "${model}"; then
+        echo "    - Model '${model}' not found. Downloading now..."
+        ollama pull "${model}"
+    else
+        echo "    - Model '${model}' already exists. Skipping download."
+    fi
+done
+echo ">>> Additional LLMs are ready."
 
 # --- 5. Environment and Backend Dependencies Setup ---
 echo ">>> (Step 5/6) Setting up .env file and installing backend dependencies..."

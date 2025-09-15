@@ -38,11 +38,12 @@ def _extract_section_content(uo_block: str, section_name: str) -> str:
 async def _generate_options(query: str, uo_id: str, uo_name: str, section: str, uo_block: str) -> Tuple[List[str], str]:
     """
     RAG 검색 결과에 따라 동적으로 프롬프트를 조정하고, 출처 정보 문자열을 함께 반환합니다.
+    - 각 LLM에서 최상의 답변 하나씩을 생성하여 총 3가지 옵션을 반환합니다.
     """
-    logger.info(f"Generating options for UO '{uo_id}' - Section '{section}'")
+    logger.info(f"Generating options for UO '{uo_id}' - Section '{section}' using multiple LLMs")
     input_context = _extract_section_content(uo_block, "Input")
     rag_query = f"Find the specific procedure or list of items for the '{section}' section of the unit operation '{uo_id}: {uo_name}' related to the experiment: {query}"
-    
+
     logger.info(f"Refined RAG Query: {rag_query}")
     context_docs = rag_pipeline.retrieve_context(rag_query, k=3)
     rag_context = rag_pipeline.format_context_for_prompt(context_docs)
@@ -75,25 +76,47 @@ Based on your general molecular biology knowledge, please write a plausible list
 Your task is to write the content for the specified section using the provided SOP context.
 """
 
-    prompts = {
-        "concise": {
-            "system": f"You are an expert scientist. Extract only the essential steps or items for the '{section}' from the user's context and list them concisely. Do not add any extra explanations. Your answer MUST be only the list or method itself.",
-            "user": f"{base_user_prompt}\n\nTask: Provide a concise, to-the-point list or summary for the '{section}' section."
-        },
-        "detailed": {
-            "system": f"You are an expert scientist. Synthesize the information from the user's context to create a detailed, step-by-step protocol or a comprehensive list for the '{section}'. Include specific parameters if available in the context. Your answer MUST be only the list or method itself.",
-            "user": f"{base_user_prompt}\n\nTask: Provide a detailed, step-by-step protocol or a comprehensive list for the '{section}' section."
-        },
-        "alternative": {
-            "system": f"You are an expert scientist. Analyze the user's context for the '{section}' and suggest alternative methods, equipment, or key considerations. Focus on potential optimizations or common pitfalls. Your answer MUST be only the list or method itself.",
-            "user": f"{base_user_prompt}\n\nTask: Provide alternative approaches, optimizations, or key considerations for the '{section}' section."
-        }
+    # 사용할 LLM 모델 목록 정의
+    models_to_use = ["biollama3", "mixtral", "llama3:70b"]
+
+    # 각 모델별로 최적의 답변을 유도하기 위한 통합 프롬프트
+    # DPO 학습 시 'concise'와 'detailed' 사이의 균형을 학습시키는 것을 목표로 합니다.
+    unified_prompt = {
+        "system": "You are a specialized scientific assistant. Your task is to generate a comprehensive and well-structured response for a specific section of a lab note, using the provided context. The response should be clear, detailed, and directly applicable to the experiment. Your answer MUST be only the list or method itself, without any extra conversation or explanation.",
+        "user": base_user_prompt
     }
-    tasks = [call_llm_api(p["system"], p["user"]) for p in prompts.values()]
+
+    tasks = [
+        call_llm_api(
+            system_prompt=unified_prompt["system"],
+            user_prompt=unified_prompt["user"],
+            model_name=model_name
+        )
+        for model_name in models_to_use
+    ]
+
     generated_options = await asyncio.gather(*tasks)
 
-    valid_options = [opt for opt in generated_options if opt and not opt.startswith("(LLM Error")]
-    return valid_options, attribution_str
+    # 생성된 옵션들을 필터링하고 attribution 정보를 추가합니다.
+    final_options = []
+    model_titles = {
+        "biollama3": "BioLLaMa3 (Default)",
+        "mixtral": "Mixtral 8x7B (Efficient)",
+        "llama3:70b": "Llama 3 70B (High-Quality)"
+    }
+    
+    for i, opt in enumerate(generated_options):
+        if opt and not opt.startswith("(LLM Error"):
+            model_name = models_to_use[i]
+            title = model_titles.get(model_name, model_name)
+            
+            # 각 모델의 출력을 구별하기 위해 제목을 추가합니다.
+            formatted_option = f"--- {title}의 제안 ---\n\n{opt}"
+            
+            # 원본 SOP 출처 정보를 맨 뒤에 추가합니다.
+            final_options.append(f"{formatted_option}\n\n{attribution_str}")
+    
+    return final_options, attribution_str
     
 # --- Agent Nodes ---
 def method_agent(state: AgentState) -> AgentState:
