@@ -52,10 +52,6 @@ last_updated_date: '2025-09-15'
 #### Results & Discussions
 - (Any results and discussions. Link file path if needed)
 
-| Header 1 | Header 2 | Header 3 |
-| --- | --- | --- |
-| 1  |  2 |  3 |
-| 4  | 5  |  6 |
 
 ------------------------------------------------------------------------
 

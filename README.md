@@ -152,11 +152,13 @@
   * **설명:** 실험 프로토콜이나 관련 지식에 대해 AI에게 자유롭게 질문하고 답변을 받습니다.
 
 ### 예시
-* **실험노트 생성결과**
+* **실험노트 생성**
 ![alt text](images/image-1.png)
 
 * **질문 답변**
-![alt text](images/선택지.png)
+### 시연 영상 (MP4)
+<video src="images/시연예시.mp4" controls="controls" muted="muted" loop="loop" playsinline="playsinline" style="max-width: 100%;">
+</video>
 
 -----
 
