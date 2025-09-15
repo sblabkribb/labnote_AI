@@ -152,7 +152,7 @@
   * **설명:** 실험 프로토콜이나 관련 지식에 대해 AI에게 자유롭게 질문하고 답변을 받습니다.
 
 ### 예시
-[시연 영상 보기](https://youtu.be/syWqqiyTmsE)
+[![시연 영상 보기](images/썸.jpg)](https://youtu.be/syWqqiyTmsE)
 
 -----
 
