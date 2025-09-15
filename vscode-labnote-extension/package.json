@@ -10,7 +10,16 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onCommand:labnote.ai.generate",
+    "onCommand:labnote.manager.newWorkflow",
+    "onCommand:labnote.manager.newHwUnitOperation",
+    "onCommand:labnote.manager.newSwUnitOperation",
+    "onCommand:labnote.manager.manageTemplates",
+    "onCommand:labnote.ai.populateSection",
+    "onCommand:labnote.ai.chat",
+    "onCommand:labnote.manager.insertTable"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
@@ -74,14 +83,14 @@
     }
   },
   "configurationDefaults": {
-      "[markdown]": {
-        "markdown.copyFiles.destination": {
-          "**/*.{png,jpg,jpeg,gif,svg,webp}": "images/",
-          "**/*": "resources/"
-        },
-        "markdown.updateLinksOnFileMove.enabled": "prompt"
-      }
-    },
+    "[markdown]": {
+      "markdown.copyFiles.destination": {
+        "**/*.{png,jpg,jpeg,gif,svg,webp}": "images/",
+        "**/*": "resources/"
+      },
+      "markdown.updateLinksOnFileMove.enabled": "prompt"
+    }
+  },
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./ && node ./copy-resources.js",
