@@ -2,7 +2,7 @@
   "name": "labnote-ai-assistant",
   "displayName": "LabNote AI Assistant",
   "description": "An AI assistant to help with writing lab notes in VS Code.",
-  "version": "1.2.0",
+  "version": "2.1.0",
   "publisher": "BiofoundryLabs",
   "engines": {
     "vscode": "^1.85.0"
@@ -10,41 +10,37 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": [
-    "onCommand:labnote.ai.generate",
-    "onCommand:labnote.ai.populateSection",
-    "onCommand:labnote.ai.chat"
-  ],
+  "activationEvents": [],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
       {
         "command": "labnote.ai.generate",
-        "title": "LabNote AI: 연구노트 생성"
-      },
-      {
-        "command": "labnote.ai.populateSection",
-        "title": "LabNote AI: 섹션 내용 채우기"
-      },
-      {
-        "command": "labnote.ai.chat",
-        "title": "LabNote AI: 일반 대화 시작"
+        "title": "LabNote: 새 연구노트 생성"
       },
       {
         "command": "labnote.manager.newWorkflow",
-        "title": "LabNote Manager: 새 워크플로우 추가"
+        "title": "LabNote: 새 워크플로우 추가"
       },
       {
         "command": "labnote.manager.newHwUnitOperation",
-        "title": "LabNote Manager: HW Unit Operation 추가"
+        "title": "LabNote: HW Unit Operation 추가"
       },
       {
         "command": "labnote.manager.newSwUnitOperation",
-        "title": "LabNote Manager: SW Unit Operation 추가"
+        "title": "LabNote: SW Unit Operation 추가"
       },
       {
         "command": "labnote.manager.manageTemplates",
-        "title": "LabNote Manager: 템플릿 관리"
+        "title": "LabNote: 템플릿 관리"
+      },
+      {
+        "command": "labnote.ai.populateSection",
+        "title": "LabNote (AI): 섹션 내용 채우기"
+      },
+      {
+        "command": "labnote.ai.chat",
+        "title": "LabNote (AI): 일반 대화 시작"
       }
     ],
     "configuration": {
@@ -80,6 +76,7 @@
     "lint": "eslint src --ext ts"
   },
   "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "18.x",
     "@types/node-fetch": "^2.6.11",
     "@types/vscode": "^1.85.0",
@@ -89,7 +86,7 @@
     "typescript": "^5.3.3"
   },
   "dependencies": {
+    "js-yaml": "^4.1.0",
     "node-fetch": "^2.7.0"
   }
 }
-

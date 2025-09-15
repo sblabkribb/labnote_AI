@@ -1,5 +1,5 @@
 ---
-title: "vector design"
+title: "golden assay"
 experimenter: AI Assistant
 created_date: '2025-09-15'
 last_updated_date: '2025-09-15'

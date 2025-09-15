@@ -305,13 +305,13 @@ async function interactiveGenerateFlow(userInput: string, outputChannel: vscode.
                 return;
             }
             const rootPath = workspaceFolders[0].uri.fsPath;
-            const labnotesRoot = path.join(rootPath, 'labnotes');
+            const labnoteRoot = path.join(rootPath, 'labnote');
 
-            if (!fs.existsSync(labnotesRoot)) {
-                fs.mkdirSync(labnotesRoot);
+            if (!fs.existsSync(labnoteRoot)) {
+                fs.mkdirSync(labnoteRoot);
             }
 
-            const entries = fs.readdirSync(labnotesRoot, { withFileTypes: true });
+            const entries = fs.readdirSync(labnoteRoot, { withFileTypes: true });
             const existingDirs = entries
                 .filter(e => e.isDirectory() && /^\d{3}_/.test(e.name))
                 .map(e => parseInt(e.name.substring(0, 3), 10));
@@ -320,7 +320,7 @@ async function interactiveGenerateFlow(userInput: string, outputChannel: vscode.
             const formattedId = nextId.toString().padStart(3, '0');
             const safeTitle = userInput.replace(/\s+/g, '_');
             const newDirName = `${formattedId}_${safeTitle}`;
-            const newDirPath = path.join(labnotesRoot, newDirName);
+            const newDirPath = path.join(labnoteRoot, newDirName);
 
             fs.mkdirSync(newDirPath, { recursive: true });
             fs.mkdirSync(path.join(newDirPath, 'images'), { recursive: true });

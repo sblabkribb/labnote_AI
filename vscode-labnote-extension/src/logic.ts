@@ -1,7 +1,8 @@
 import * as yaml from 'js-yaml';
 import * as path from 'path';
-import { FileSystemProvider } from './fileSystemProvider';
+import { FileSystemProvider, FsDirent } from './fileSystemProvider'; // Corrected import
 
+// 모듈 레벨 변수로 defaultExperimenter 관리
 let defaultExperimenter: string = '';
 
 export function setDefaultExperimenter(author: string): void {
@@ -36,6 +37,7 @@ export interface ReadmeFrontMatter {
 }
 
 function getSeoulDateString(date: Date): string {
+    // Returns YYYY-MM-DD in Asia/Seoul timezone
     return new Intl.DateTimeFormat('en-CA', {
         timeZone: 'Asia/Seoul',
         year: 'numeric',
@@ -45,7 +47,13 @@ function getSeoulDateString(date: Date): string {
 }
 
 function getSeoulDateTimeString(date: Date): string {
-    const datePart = getSeoulDateString(date);
+    // Returns YYYY-MM-DD HH:mm in Asia/Seoul timezone (24h)
+    const datePart = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Seoul',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+    }).format(date);
     const timePart = new Intl.DateTimeFormat('en-GB', {
         timeZone: 'Asia/Seoul',
         hour12: false,
@@ -55,6 +63,61 @@ function getSeoulDateTimeString(date: Date): string {
     return `${datePart} ${timePart}`;
 }
 
+function getFormattedDate(date: Date): string {
+    return getSeoulDateString(date);
+}
+
+function getNextExperimentNumber(existingDirs: string[]): number {
+    if (existingDirs.length === 0) return 1;
+    const latestId = existingDirs
+        .map(dir => parseInt(dir.substring(0, 3), 10))
+        .filter(num => !isNaN(num))
+        .sort((a, b) => b - a)[0];
+    return (latestId || 0) + 1;
+}
+
+export function createNewLabnote(provider: FileSystemProvider, workspaceRoot: string, experimentTitle: string) {
+    if (!experimentTitle) {
+        throw new Error("Experiment title cannot be empty.");
+    }
+    const labnoteRoot = path.join(workspaceRoot, 'labnote');
+    if (!provider.exists(labnoteRoot)) provider.mkdir(labnoteRoot);
+
+    const entries = provider.readDir(labnoteRoot);
+    const existingDirs = entries.filter(e => e.isDirectory() && /^\d{3}_/.test(e.name)).map(e => e.name);
+    
+    const nextId = getNextExperimentNumber(existingDirs);
+    const formattedId = nextId.toString().padStart(3, '0');
+    const safeTitle = experimentTitle.replace(/\s+/g, '_');
+    const newDirName = `${formattedId}_${safeTitle}`;
+    const newDirPath = path.join(labnoteRoot, newDirName);
+
+    provider.mkdir(path.join(newDirPath, 'images'));
+    provider.mkdir(path.join(newDirPath, 'resource'));
+
+    const formattedDate = getFormattedDate(new Date());
+    const readmeFrontMatter: ReadmeFrontMatter = {
+        title: experimentTitle,
+        author: '',
+        experiment_type: 'labnote',
+        created_date: formattedDate,
+        last_updated_date: formattedDate,
+    };
+    
+    const yamlText = yaml.dump(readmeFrontMatter, { sortKeys: false, lineWidth: -1 });
+    const readmeContent = `---\n${yamlText}---\n\n## 🎯 실험 목표\n| 이 실험의 주된 목표와 가설을 간략하게 작성합니다.\n\n## 🗂️ 관련 워크플로\n\n| 아래 표시 사이에 관련된 워크플로 파일 목록을 입력합니다.\n| \`F1\`, \`New workflow\` 명령 수행시 해당 목록은 표시된 위치 사이에 자동 추가됩니다.\n| 위 YAML 블록의 author: 항목에 입력된 이름은 워크플로와 유닛오퍼레이션 생성시 실험자 이름으로 자동 입력됩니다.\n\n\n\n\n\n`;
+
+    const newReadmePath = path.join(newDirPath, 'README.md');
+    provider.writeTextFile(newReadmePath, readmeContent);
+
+    const parsedFrontMatter = parseReadmeFrontMatter(readmeContent);
+    const globalAuthor = parsedFrontMatter?.author || '';
+    setDefaultExperimenter(globalAuthor);
+
+    return { newReadmePath, newDirName };
+}
+
+
 export function createNewWorkflow(provider: FileSystemProvider, readmePath: string, selectedWorkflow: ParsedWorkflow, description: string) {
     const today = new Date();
     const safeName = selectedWorkflow.name.replace(/\s+/g, '_');
@@ -62,13 +125,14 @@ export function createNewWorkflow(provider: FileSystemProvider, readmePath: stri
 
     const currentDir = path.dirname(readmePath);
 
+    // Determine next 3-digit sequence by scanning existing workflow files
     let nextSeq = 1;
     try {
         const entries = provider.readDir(currentDir);
         const existingSeqs = entries
-            .filter(e => !e.isDirectory() && /^\d{3}_.+\.md$/i.test(e.name))
-            .map(e => parseInt(e.name.substring(0, 3), 10))
-            .filter(n => !isNaN(n));
+            .filter((e: FsDirent) => !e.isDirectory() && /^\d{3}_.+\.md$/i.test(e.name)) // Added type
+            .map((e: FsDirent) => parseInt(e.name.substring(0, 3), 10)) // Added type
+            .filter((n: number) => !isNaN(n)); // Added type
         if (existingSeqs.length > 0) {
             nextSeq = Math.max(...existingSeqs) + 1;
         }
@@ -99,19 +163,24 @@ export function createNewWorkflow(provider: FileSystemProvider, readmePath: stri
 }
 
 export function isValidReadmePath(filePath: string): boolean {
-    const normalizedPath = path.normalize(filePath);
-    const parts = normalizedPath.split(path.sep);
-
-    if (parts.length < 3 || parts[parts.length - 1].toLowerCase() !== 'readme.md') {
+    if (path.basename(filePath).toLowerCase() !== 'readme.md') {
         return false;
     }
+    try {
+        const dirPath = path.dirname(filePath);
+        const experimentDirName = path.basename(dirPath);
 
-    const experimentDir = parts[parts.length - 2];
-    const labnoteDir = parts[parts.length - 3];
+        const labnoteDirPath = path.dirname(dirPath);
+        const labnoteDirName = path.basename(labnoteDirPath);
 
-    return labnoteDir.toLowerCase() === 'labnote' && /^\d{3}_/.test(experimentDir);
+        const isLabnoteDir = labnoteDirName.toLowerCase() === 'labnote';
+        const hasCorrectPrefix = /^\d{3}_/.test(experimentDirName);
+
+        return isLabnoteDir && hasCorrectPrefix;
+    } catch (e: unknown) {
+        return false;
+    }
 }
-
 
 export function isValidWorkflowPath(filePath: string): boolean {
     const base = path.basename(filePath).toLowerCase();
@@ -139,8 +208,7 @@ export function parseWorkflows(content: string): ParsedWorkflow[] {
         if (match) {
             const id = match[1];
             const name = match[2].trim();
-            const descriptionLine = lines.slice(i + 1).find(line => line.trim().startsWith('-'));
-            const description = descriptionLine ? descriptionLine.trim().replace(/^- /, '') : 'No description available.';
+            const description = (lines[i + 1] || '').trim().replace(/^- /, '');
             workflows.push({ id, name, description, label: `${id}: ${name}` });
         }
     }
@@ -148,10 +216,10 @@ export function parseWorkflows(content: string): ParsedWorkflow[] {
 }
 
 export function createWorkflowFileContent(workflow: ParsedWorkflow, userDescription: string, date: Date, experimenter: string): string {
-    const formattedDate = getSeoulDateString(date);
+    const formattedDate = getFormattedDate(date);
     const title = `${workflow.id} ${workflow.name}${userDescription ? ` - ${userDescription}` : ''}`;
     
-    const frontMatter: any = {
+    const frontMatter: WorkflowFrontMatter = {
         title: title,
         experimenter: experimenter,
         created_date: formattedDate,
@@ -165,6 +233,17 @@ export function createWorkflowFileContent(workflow: ParsedWorkflow, userDescript
     const unitOperationSection = `## 🗂️ 관련 유닛오퍼레이션\n| 관련된 유닛오퍼레이션 목록을 아래 표시 사이에 입력합니다.\n| \`F1\`, \`New HW/SW Unit Operation\` 명령 수행시 해당 목록은 표시된 위치 사이에 자동 추가됩니다.\n\n\n\n\n\n\n`;
 
     return `---\n${yamlText}---\n\n${bodyTitle}\n${bodyDescription}\n\n${unitOperationSection}\n`;
+}
+
+export function parseWorkflowFrontMatter(fileContent: string): WorkflowFrontMatter | null {
+    const match = fileContent.match(/^---([\s\S]+?)---/);
+    if (!match) return null;
+    try {
+        const parsed = yaml.load(match[1]) as WorkflowFrontMatter;
+        return (parsed && typeof parsed.title === 'string') ? parsed : null;
+    } catch (e) {
+        return null;
+    }
 }
 
 export function parseReadmeFrontMatter(fileContent: string): ReadmeFrontMatter | null {
@@ -182,15 +261,16 @@ export function createUnitOperationContent(selectedUo: ParsedUnitOperation, user
     const formattedDateTime = getSeoulDateTimeString(date);
     const descriptionPart = userDescription ? ` ${userDescription}` : '';
     const uoDescriptionLine = selectedUo.description ? `\n\n- **Description**: ${selectedUo.description}` : '';
+
     const finalExperimenter = experimenter !== undefined ? experimenter : getDefaultExperimenter();
 
-    return `\n------------------------------------------------------------------------\n\n### [${selectedUo.id} ${selectedUo.name}]${descriptionPart}${uoDescriptionLine}\n\n#### Meta\n- Experimenter: ${finalExperimenter}\n- Start_date: '${formattedDateTime}'\n- End_date: ''\n\n#### Input\n- (samples from the previous step)\n\n#### Reagent\n- (e.g. enzyme, buffer, etc.)\n\n#### Consumables\n- (e.g. filter, well-plate, etc.)\n\n#### Equipment\n- (e.g. centrifuge, spectrophotometer, etc.)\n\n#### Method\n- (method used in this step)\n\n#### Output\n- (samples to the next step)\n\n#### Results & Discussions\n- (Any results and discussions. Link file path if needed)\n\n------------------------------------------------------------------------\n`;
+    return `\n\n------------------------------------------------------------------------\n\n### [${selectedUo.id} ${selectedUo.name}]${descriptionPart}${uoDescriptionLine}\n\n#### Meta\n- Experimenter: ${finalExperimenter}\n- Start_date: '${formattedDateTime}'\n- End_date: ''\n\n#### Input\n- (samples from the previous step) \n\n#### Reagent\n- (e.g. enzyme, buffer, etc.) \n\n#### Consumables\n- (e.g. filter, well-plate, etc.) \n\n#### Equipment\n- (e.g. centrifuge, spectrophotometer, etc.) \n\n#### Method\n- (method used in this step) \n\n#### Output\n- (samples to the next step) \n\n#### Results & Discussions\n- (Any results and discussions. Link file path if needed)\n\n------------------------------------------------------------------------\n`;
 }
-
 
 export interface ParsedUnitOperation {
     id: string;
     name: string;
+    software: string;
     description: string;
     label: string;
 }
@@ -203,12 +283,27 @@ export function parseUnitOperations(content: string): ParsedUnitOperation[] {
         if (nameMatch) {
             const id = nameMatch[1];
             const name = nameMatch[2].trim();
-            const descriptionLine = lines.slice(i + 1).find(line => line.trim().startsWith('- **Description**:'));
-            const description = descriptionLine ? descriptionLine.replace(/- \*\*Description\*\*:/, '').trim() : 'No description.';
+            
+            let software = '';
+            if (i + 1 < lines.length) {
+                const softwareMatch = lines[i + 1].match(/^\s+-\s+\*\*Software\*\*:\s*(.*)/);
+                if (softwareMatch) {
+                    software = softwareMatch[1].trim();
+                }
+            }
+
+            let description = '';
+            if (i + 2 < lines.length) {
+                const descriptionMatch = lines[i + 2].match(/^\s+-\s+\*\*Description\*\*:\s*(.*)/);
+                if (descriptionMatch) {
+                    description = descriptionMatch[1].trim();
+                }
+            }
 
             unitOperations.push({ 
                 id, 
                 name, 
+                software,
                 description, 
                 label: `${id}: ${name}` 
             });

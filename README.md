@@ -102,4 +102,4 @@ Vessl을 사용하는 것이 가장 간편하며, 로컬 환경에서도 Docker�
 ![alt text](image-1.png)
 
 * 질문 답변
-![alt text](image.png)
+![alt text](선택지.png)
