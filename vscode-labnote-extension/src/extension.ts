@@ -126,6 +126,47 @@ export function activate(context: vscode.ExtensionContext) {
             if (action?.label === 'Edit File') {
                 await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(template.filePath));
             }
+        }),
+        vscode.commands.registerCommand('labnote.manager.insertTable', async () => {
+            const editor = vscode.window.activeTextEditor;
+            if (!editor) {
+                vscode.window.showErrorMessage("표를 삽입하려면 활성화된 편집기가 필요합니다.");
+                return;
+            }
+
+            // 1. 사용자로부터 행과 열 개수 입력받기
+            const columns = await vscode.window.showInputBox({
+                prompt: "생성할 표의 열(Column) 개수를 입력하세요.",
+                value: '3',
+                validateInput: text => /^[1-9]\d*$/.test(text) ? null : '유효한 숫자를 입력하세요.'
+            });
+            if (!columns) return;
+
+            const rows = await vscode.window.showInputBox({
+                prompt: "생성할 표의 행(Row) 개수(헤더 제외)를 입력하세요.",
+                value: '2',
+                validateInput: text => /^[1-9]\d*$/.test(text) ? null : '유효한 숫자를 입력하세요.'
+            });
+            if (!rows) return;
+
+            const numCols = parseInt(columns, 10);
+            const numRows = parseInt(rows, 10);
+
+            // 2. 마크다운 표 문자열 생성
+            let table = '\n';
+            // 헤더
+            table += `| ${Array(numCols).fill('Header').map((h, i) => `${h} ${i + 1}`).join(' | ')} |\n`;
+            // 구분선
+            table += `| ${Array(numCols).fill('---').join(' | ')} |\n`;
+            // 본문
+            for (let i = 0; i < numRows; i++) {
+                table += `| ${Array(numCols).fill(' ').join(' | ')} |\n`;
+            }
+
+            // 3. 편집기에 삽입
+            editor.edit(editBuilder => {
+                editBuilder.insert(editor.selection.active, table);
+            });
         })
     );
 }

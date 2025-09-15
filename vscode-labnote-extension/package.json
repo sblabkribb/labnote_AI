@@ -41,6 +41,10 @@
       {
         "command": "labnote.ai.chat",
         "title": "LabNote (AI): 일반 대화 시작"
+      },
+      {
+        "command": "labnote.manager.insertTable",
+        "title": "LabNote: 표 삽입"
       }
     ],
     "configuration": {
