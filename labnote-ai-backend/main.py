@@ -488,3 +488,11 @@ def clear_history(conversation_id: str):
 def health_check():
     """API 서버가 실행 중인지 확인하는 상태 체크 엔드포인트입니다."""
     return {"status": "ok", "version": app.version}
+
+@app.get("/constants", summary="Get All Workflows and Unit Operations")
+def get_constants():
+    """Returns the complete lists of all workflows and unit operations."""
+    return {
+        "ALL_WORKFLOWS": ALL_WORKFLOWS_DATA,
+        "ALL_UOS": ALL_UOS_DATA
+    }

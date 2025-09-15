@@ -48,7 +48,7 @@
       "properties": {
         "labnote.ai.backendUrl": {
           "type": "string",
-          "default": "http://123.37.5.184:30616",
+          "default": "http://123.37.5.184:32365",
           "description": "The base URL of the LabNote AI backend server (e.g., https://...vessl.ai)."
         },
         "labnote.manager.workflowsPath": {
@@ -71,7 +71,7 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
+    "compile": "tsc -p ./ && node ./copy-resources.js",
     "watch": "tsc -watch -p ./",
     "lint": "eslint src --ext ts"
   },

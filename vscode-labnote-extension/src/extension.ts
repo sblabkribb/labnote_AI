@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as logic from './logic';
+import { FileSystemProvider } from './fileSystemProvider'; // fileSystemProvider.ts에서 가져오도록 수정
 
 // node-fetch v2는 CommonJS 모듈이므로 require 구문을 사용하는 것이 가장 안정적입니다.
 const fetch = require('node-fetch');
@@ -15,20 +16,6 @@ interface SectionContext {
     query: string;
     fileContent: string;
     placeholderRange: vscode.Range;
-}
-
-// FileSystemProvider 인터페이스 및 구현
-export interface FsDirent {
-    name: string;
-    isDirectory(): boolean;
-}
-
-export interface FileSystemProvider {
-    exists(path: string): boolean;
-    mkdir(path: string): void;
-    readDir(path: string): FsDirent[];
-    readTextFile(path: string): string;
-    writeTextFile(path: string, content: string): void;
 }
 
 const realFsProvider: FileSystemProvider = {
@@ -45,23 +32,6 @@ export function activate(context: vscode.ExtensionContext) {
     outputChannel.appendLine("LabNote AI/Manager extension is now active.");
 
     // --- 템플릿 경로 관리 ---
-    const globalStoragePath = context.globalStorageUri.fsPath;
-    if (!realFsProvider.exists(globalStoragePath)) {
-        realFsProvider.mkdir(globalStoragePath);
-    }
-
-    const copyResourceFileToGlobalStorage = (fileName: string) => {
-        const globalPath = path.join(globalStoragePath, fileName);
-        if (!realFsProvider.exists(globalPath)) {
-            const bundledPath = path.join(context.extensionPath, 'resources', fileName);
-            if (realFsProvider.exists(bundledPath)) {
-                const defaultContent = realFsProvider.readTextFile(bundledPath);
-                realFsProvider.writeTextFile(globalPath, defaultContent);
-            }
-        }
-        return globalPath;
-    };
-
     const resolveConfiguredPath = (settingKey: string, defaultFileName: string): string => {
         const config = vscode.workspace.getConfiguration('labnote.manager');
         let configured = (config.get<string>(settingKey) || '').trim();
@@ -80,7 +50,7 @@ export function activate(context: vscode.ExtensionContext) {
                 vscode.window.showWarningMessage(`[Labnote Manager] 설정된 경로를 찾을 수 없어 기본 템플릿으로 대체합니다: ${configured}`);
             }
         }
-        return copyResourceFileToGlobalStorage(defaultFileName);
+        return path.join(context.extensionPath, 'out', 'resources', defaultFileName);
     };
 
     const customWorkflowsPath = resolveConfiguredPath('workflowsPath', 'workflows_en.md');
@@ -89,60 +59,50 @@ export function activate(context: vscode.ExtensionContext) {
 
     // --- 명령어 등록 ---
     context.subscriptions.push(
-        // AI Commands
-        vscode.commands.registerCommand('labnote.ai.generate', async () => {
-             const userInput = await vscode.window.showInputBox({
+        vscode.commands.registerCommand('labnote.ai.generate', () => {
+             vscode.window.showInputBox({
                 prompt: '생성할 연구노트의 핵심 내용을 입력하세요.',
                 placeHolder: '예: Golden Gate Assembly 이용한 플라스미드 제작'
+            }).then(userInput => {
+                if (userInput) interactiveGenerateFlow(userInput, outputChannel);
             });
-            if (userInput) await interactiveGenerateFlow(userInput, outputChannel);
         }),
         vscode.commands.registerCommand('labnote.ai.populateSection', () => populateSectionFlow(context, outputChannel)),
-        vscode.commands.registerCommand('labnote.ai.chat', async () => {
-             const userInput = await vscode.window.showInputBox({
+        vscode.commands.registerCommand('labnote.ai.chat', () => {
+             vscode.window.showInputBox({
                 prompt: 'AI에게 질문할 내용을 입력하세요.',
                 placeHolder: '예: CRISPR-Cas9 시스템에 대해 설명해줘'
+            }).then(userInput => {
+                if (userInput) callChatApi(userInput, outputChannel);
             });
-            if (userInput) await callChatApi(userInput, outputChannel);
         }),
-
-        // Manager Commands
         vscode.commands.registerCommand('labnote.manager.newWorkflow', async () => {
             try {
                 const activeUri = getActiveFileUri();
-                if (!activeUri) {
-                    vscode.window.showErrorMessage("활성화된 편집기(editor)가 없습니다.");
+                if (!activeUri || !logic.isValidReadmePath(activeUri.fsPath)) {
+                    vscode.window.showErrorMessage("이 명령어는 'labnotes/<번호>_주제/README.md' 파일에서만 실행할 수 있습니다.");
                     return;
                 }
-                const readmePath = activeUri.fsPath;
-                if (!logic.isValidReadmePath(readmePath)) {
-                    vscode.window.showErrorMessage("이 명령어는 'labnote/<번호>_주제/README.md' 파일에서만 실행할 수 있습니다.");
-                    return;
-                }
-
+                
                 const customWorkflowsContent = realFsProvider.readTextFile(customWorkflowsPath);
                 const workflowItems = logic.parseWorkflows(customWorkflowsContent);
-
                 const selectedWorkflow = await vscode.window.showQuickPick(workflowItems, { placeHolder: "Select a standard workflow" });
                 if (!selectedWorkflow) return;
 
                 const description = await vscode.window.showInputBox({ prompt: `Enter a specific description for "${selectedWorkflow.label}"` });
                 if (description === undefined) return;
 
-                const result = logic.createNewWorkflow(realFsProvider, readmePath, selectedWorkflow, description);
+                const result = logic.createNewWorkflow(realFsProvider, activeUri.fsPath, selectedWorkflow, description);
 
-                const readmeUri = vscode.Uri.file(readmePath);
-                const doc = await vscode.workspace.openTextDocument(readmeUri);
+                const doc = await vscode.workspace.openTextDocument(activeUri);
                 const insertPos = findInsertPosBeforeEndMarker(doc, 'WORKFLOW_LIST_END');
                 const we = new vscode.WorkspaceEdit();
-                we.insert(readmeUri, insertPos, result.textToInsert);
+                we.insert(activeUri, insertPos, result.textToInsert);
                 await vscode.workspace.applyEdit(we);
                 await doc.save();
-
                 vscode.window.showInformationMessage(`워크플로 '${path.basename(result.workflowFilePath)}'가 생성되었습니다.`);
-            } catch (error: unknown) {
-                const errorMessage = error instanceof Error ? error.message : String(error);
-                vscode.window.showErrorMessage(`[New Workflow] 오류: ${errorMessage}`);
+            } catch (error: any) {
+                vscode.window.showErrorMessage(`[New Workflow] 오류: ${error.message}`);
             }
         }),
         vscode.commands.registerCommand('labnote.manager.newHwUnitOperation', createUnitOperationCommand(realFsProvider, customHwUoPath)),
@@ -156,59 +116,15 @@ export function activate(context: vscode.ExtensionContext) {
                 }), 
                 { placeHolder: 'Select a template file to manage' }
             );
-
             if (!template) return;
 
             const action = await vscode.window.showQuickPick(
-                [
-                    { label: 'Edit File', description: 'Open the file for manual editing' },
-                    { label: 'Reset to Default', description: 'Overwrite with the extension\'s default version' },
-                    { label: 'Reveal File Location', description: 'Show the file in your file explorer' },
-                    { label: 'Import from File...', description: 'Overwrite with an external file' },
-                ],
+                [{ label: 'Edit File', description: 'Open the file for manual editing' }],
                 { placeHolder: `Select an action for '${template.label}'` }
             );
 
-            if (!action) return;
-
-            try {
-                switch (action.label) {
-                    case 'Edit File':
-                        await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(template.filePath));
-                        break;
-                    case 'Reset to Default':
-                        const confirmation = await vscode.window.showWarningMessage(
-                            `Are you sure you want to reset '${template.label}' to default? All your changes will be lost.`,
-                            { modal: true },
-                            'Yes, reset'
-                        );
-                        if (confirmation === 'Yes, reset') {
-                            const bundledPath = path.join(context.extensionPath, 'resources', path.basename(template.filePath));
-                            const defaultContent = realFsProvider.readTextFile(bundledPath);
-                            realFsProvider.writeTextFile(template.filePath, defaultContent);
-                            vscode.window.showInformationMessage(`'${template.label}' has been reset to default.`);
-                        }
-                        break;
-                    case 'Reveal File Location':
-                        await vscode.env.openExternal(vscode.Uri.file(path.dirname(template.filePath)));
-                        break;
-                    case 'Import from File...':
-                        const options: vscode.OpenDialogOptions = {
-                            canSelectMany: false,
-                            openLabel: 'Import',
-                            filters: { 'Markdown files': ['md'] }
-                        };
-                        const fileUri = await vscode.window.showOpenDialog(options);
-                        if (fileUri && fileUri[0]) {
-                            const importedContent = realFsProvider.readTextFile(fileUri[0].fsPath);
-                            realFsProvider.writeTextFile(template.filePath, importedContent);
-                            vscode.window.showInformationMessage(`'${template.label}' imported successfully.`);
-                        }
-                        break;
-                }
-            } catch (error: unknown) {
-                const errorMessage = error instanceof Error ? error.message : String(error);
-                vscode.window.showErrorMessage(`Error managing '${template.label}': ${errorMessage}`);
+            if (action?.label === 'Edit File') {
+                await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(template.filePath));
             }
         })
     );
@@ -223,10 +139,9 @@ function getActiveFileUri(): vscode.Uri | null {
     if (editor) return editor.document.uri;
     const activeTab = vscode.window.tabGroups.activeTabGroup?.activeTab;
     const input = activeTab?.input as unknown;
-    if (!input) return null;
     if (input instanceof vscode.TabInputText) return input.uri;
     if (input instanceof vscode.TabInputTextDiff) return input.modified;
-    if (typeof input === 'object' && input !== null && 'uri' in (input as Record<string, unknown>)) {
+    if (input && typeof input === 'object' && 'uri' in input) {
         return (input as { uri: vscode.Uri }).uri;
     }
     return null;
@@ -236,38 +151,33 @@ function findInsertPosBeforeEndMarker(doc: vscode.TextDocument, endMarker: strin
     for (let i = doc.lineCount - 1; i >= 0; i--) {
         const line = doc.lineAt(i);
         if (line.text.includes(endMarker)) {
-            // 주석 바로 위 줄의 끝에 삽입
-            return new vscode.Position(i > 0 ? i - 1 : 0, doc.lineAt(Math.max(0, i - 1)).text.length);
+            const targetLine = Math.max(0, i - 1);
+            return new vscode.Position(targetLine, doc.lineAt(targetLine).text.length);
         }
     }
-    return new vscode.Position(doc.lineCount, 0); // 찾지 못하면 맨 끝
+    return new vscode.Position(doc.lineCount, 0);
 }
-
 
 function createUnitOperationCommand(fsProvider: FileSystemProvider, uoFilePath: string): () => Promise<void> {
     return async () => {
         const activeUri = getActiveFileUri();
-        if (!activeUri) {
-            vscode.window.showErrorMessage("활성화된 편집기(editor)가 없습니다.");
-            return;
-        }
-        if (!logic.isValidWorkflowPath(activeUri.fsPath)) {
-            vscode.window.showErrorMessage("이 명령어는 'labnote' 실험 폴더 내의 워크플로 파일에서만 실행할 수 있습니다.");
+        if (!activeUri || !logic.isValidWorkflowPath(activeUri.fsPath)) {
+            vscode.window.showErrorMessage("이 명령어는 'labnotes' 실험 폴더 내의 워크플로 파일에서만 실행할 수 있습니다.");
             return;
         }
 
         try {
             const uoContent = fsProvider.readTextFile(uoFilePath);
             const uoItems = logic.parseUnitOperations(uoContent);
-
             const selectedUo = await vscode.window.showQuickPick(uoItems, { placeHolder: "Select a Unit Operation" });
             if (!selectedUo) return;
 
             const userDescription = await vscode.window.showInputBox({ prompt: `Enter a specific description for "${selectedUo.name}"` });
             if (userDescription === undefined) return;
 
+            // [수정된 경로 로직]
             const workflowDir = path.dirname(activeUri.fsPath);
-            const readmePath = path.join(path.dirname(workflowDir), 'README.md');
+            const readmePath = path.join(workflowDir, 'README.md'); 
             
             let experimenter = '';
             if (fsProvider.exists(readmePath)) {
@@ -282,13 +192,11 @@ function createUnitOperationCommand(fsProvider: FileSystemProvider, uoFilePath: 
             const we = new vscode.WorkspaceEdit();
             we.insert(activeUri, pos, textToInsert);
             await vscode.workspace.applyEdit(we);
-        } catch (error: unknown) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            vscode.window.showErrorMessage(`Error creating Unit Operation: ${errorMessage}`);
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`Error creating Unit Operation: ${error.message}`);
         }
     };
 }
-
 
 // --- AI Feature Implementations ---
 
@@ -305,35 +213,30 @@ async function interactiveGenerateFlow(userInput: string, outputChannel: vscode.
                 return;
             }
             const rootPath = workspaceFolders[0].uri.fsPath;
-            const labnoteRoot = path.join(rootPath, 'labnote');
+            const labnotesRoot = path.join(rootPath, 'labnotes');
 
-            if (!fs.existsSync(labnoteRoot)) {
-                fs.mkdirSync(labnoteRoot);
-            }
+            if (!fs.existsSync(labnotesRoot)) fs.mkdirSync(labnotesRoot);
 
-            const entries = fs.readdirSync(labnoteRoot, { withFileTypes: true });
-            const existingDirs = entries
-                .filter(e => e.isDirectory() && /^\d{3}_/.test(e.name))
-                .map(e => parseInt(e.name.substring(0, 3), 10));
+            const entries = fs.readdirSync(labnotesRoot, { withFileTypes: true });
+            const existingDirs = entries.filter(e => e.isDirectory() && /^\d{3}_/.test(e.name)).map(e => parseInt(e.name.substring(0, 3), 10));
             
             const nextId = existingDirs.length > 0 ? Math.max(...existingDirs) + 1 : 1;
             const formattedId = nextId.toString().padStart(3, '0');
             const safeTitle = userInput.replace(/\s+/g, '_');
             const newDirName = `${formattedId}_${safeTitle}`;
-            const newDirPath = path.join(labnoteRoot, newDirName);
+            const newDirPath = path.join(labnotesRoot, newDirName);
 
             fs.mkdirSync(newDirPath, { recursive: true });
             fs.mkdirSync(path.join(newDirPath, 'images'), { recursive: true });
             fs.mkdirSync(path.join(newDirPath, 'resources'), { recursive: true });
 
             outputChannel.appendLine(`[Info] Created new experiment folder: ${newDirPath}`);
-
             progress.report({ increment: 10, message: "실험 구조 분석 중..." });
+
             const config = vscode.workspace.getConfiguration('labnote.ai');
             const baseUrl = config.get<string>('backendUrl');
             if (!baseUrl) throw new Error("Backend URL이 설정되지 않았습니다.");
 
-            // AI 호출 대신 수동 선택 메뉴 사용
             const { ALL_WORKFLOWS, ALL_UOS } = await fetchConstants(baseUrl, outputChannel);
             const finalWorkflowId = await showWorkflowSelectionMenu(ALL_WORKFLOWS);
             if (!finalWorkflowId) return;
@@ -351,16 +254,13 @@ async function interactiveGenerateFlow(userInput: string, outputChannel: vscode.
             if (!createScaffoldResponse.ok) throw new Error(`뼈대 생성 실패 (HTTP ${createScaffoldResponse.status}): ${await createScaffoldResponse.text()}`);
             
             const scaffoldData = await createScaffoldResponse.json() as { files: Record<string, string> };
-
             progress.report({ increment: 90, message: "파일 저장 및 표시 중..." });
             
             for (const fileName in scaffoldData.files) {
-                if (Object.prototype.hasOwnProperty.call(scaffoldData.files, fileName)) {
-                    const content = scaffoldData.files[fileName];
-                    const filePath = path.join(newDirPath, fileName);
-                    fs.writeFileSync(filePath, content);
-                    outputChannel.appendLine(`[Success] Created file: ${filePath}`);
-                }
+                const content = scaffoldData.files[fileName];
+                const filePath = path.join(newDirPath, fileName);
+                fs.writeFileSync(filePath, content);
+                outputChannel.appendLine(`[Success] Created file: ${filePath}`);
             }
 
             const readmePath = path.join(newDirPath, 'README.md');
@@ -368,12 +268,9 @@ async function interactiveGenerateFlow(userInput: string, outputChannel: vscode.
             await vscode.window.showTextDocument(doc, { preview: false });
 
             vscode.window.showInformationMessage(`연구노트 '${newDirName}' 및 관련 워크플로우 파일들이 생성되었습니다.`);
-            outputChannel.show(true);
-
         } catch (error: any) {
-            vscode.window.showErrorMessage('LabNote AI 작업 중 오류가 발생했습니다. 자세한 내용은 출력 채널을 확인하세요.');
+            vscode.window.showErrorMessage('LabNote AI 작업 중 오류가 발생했습니다: ' + error.message);
             outputChannel.appendLine(`[ERROR] ${error.message}`);
-            outputChannel.show(true);
         }
     });
 }
@@ -467,7 +364,6 @@ async function populateSectionFlow(extensionContext: vscode.ExtensionContext, ou
     } catch (error: any) {
         vscode.window.showErrorMessage(`LabNote AI 작업 중 오류 발생: ${error.message}`);
         outputChannel.appendLine(`[ERROR] ${error.message}`);
-        outputChannel.show(true);
     }
 }
 
@@ -504,17 +400,13 @@ async function callChatApi(userInput: string, outputChannel: vscode.OutputChanne
         } catch (error: any) {
             vscode.window.showErrorMessage('LabNote AI와 대화 중 오류가 발생했습니다.');
             outputChannel.appendLine(`[ERROR] ${error.message}`);
-            outputChannel.show(true);
         }
     });
 }
 // --- Webview and Context Finding Functions ---
 
 function createPopulateWebviewPanel(section: string, options: string[]): vscode.WebviewPanel {
-    const panel = vscode.window.createWebviewPanel(
-        'labnoteAiPopulate', `AI 제안: ${section}`, vscode.ViewColumn.Beside,
-        { enableScripts: true, localResourceRoots: [] }
-    );
+    const panel = vscode.window.createWebviewPanel('labnoteAiPopulate', `AI 제안: ${section}`, vscode.ViewColumn.Beside, { enableScripts: true });
     panel.webview.html = getWebviewContent(section, options);
     return panel;
 }
@@ -560,8 +452,9 @@ function getWebviewContent(section: string, options: string[]): string {
                 });
             });
             applyBtn.addEventListener('click', () => {
-                if (!selectedCard) return;
-                vscode.postMessage({ command: 'applyOption', index: selectedCard.dataset.index });
+                if (selectedCard) {
+                    vscode.postMessage({ command: 'applyOption', index: selectedCard.dataset.index });
+                }
             });
         </script>
     </body>
@@ -627,7 +520,6 @@ async function fetchConstants(baseUrl: string, outputChannel: vscode.OutputChann
         return await response.json();
     } catch (e: any) {
         outputChannel.appendLine(`[Error] 백엔드에서 상수를 가져올 수 없습니다: ${e.message}. 로컬 폴백을 사용합니다.`);
-        // 백엔드 사용 불가 시 최소한의 폴백 반환
         return {
             ALL_WORKFLOWS: { "WD070": "Vector Design" },
             ALL_UOS: { "UHW400": "Manual" }
@@ -636,26 +528,26 @@ async function fetchConstants(baseUrl: string, outputChannel: vscode.OutputChann
 }
 
 async function showWorkflowSelectionMenu(workflows: { [id: string]: string }): Promise<string | undefined> {
-    const allWorkflowItems = Object.keys(workflows).map(id => ({ id: id, label: `[${id}]`, description: workflows[id] }));
+    const allWorkflowItems = Object.keys(workflows).map(id => ({ id, label: `[${id}]`, description: workflows[id] }));
     const selectedItem = await vscode.window.showQuickPick(allWorkflowItems, { title: '워크플로우 선택', matchOnDescription: true, placeHolder: '이름이나 ID로 검색...' });
     return selectedItem?.id;
 }
 
 async function showUnifiedUoSelectionMenu(uos: { [id: string]: string }, recommendedIds: string[]): Promise<string[] | undefined> {
     const recommendedSet = new Set(recommendedIds);
-    const allUoItems = Object.keys(uos).map(id => ({ id: id, label: `[${id}]`, description: uos[id], picked: recommendedSet.has(id) }));
+    const allUoItems = Object.keys(uos).map(id => ({ id, label: `[${id}]`, description: uos[id], picked: recommendedSet.has(id) }));
     allUoItems.sort((a, b) => {
         const aIsRecommended = recommendedSet.has(a.id);
         const bIsRecommended = recommendedSet.has(b.id);
         if (aIsRecommended && !bIsRecommended) return -1;
-        if (!aIsRecommended && bIsRecommended) return 1;
+        if (!bIsRecommended && aIsRecommended) return 1;
         return a.id.localeCompare(b.id);
     });
     const selectedItems = await vscode.window.showQuickPick(allUoItems, { 
         title: 'Unit Operation 선택 (AI 추천 항목이 미리 선택됨)', 
         canPickMany: true, 
         matchOnDescription: true, 
-        placeHolder: '이름이나 ID로 검색하여 선택/해제 후 Enter', 
+        placeHolder: '체크박스를 클릭하여 선택/해제 후 Enter', 
     });
     return selectedItems?.map(item => item.id);
 }
