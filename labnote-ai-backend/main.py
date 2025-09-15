@@ -307,28 +307,54 @@ def _extract_section_content(uo_block: str, section_name: str) -> str:
 
 @app.post("/create_scaffold", response_model=LabNoteResponse)
 async def create_scaffold(request: CreateScaffoldRequest):
-    logger.info(f"Phase 1: Creating multi-file scaffold for WF: {request.workflow_id}")
+    logger.info(f"Corrected multi-file scaffold generation for WF: {request.workflow_id}")
     try:
-        wf_name = ALL_WORKFLOWS_DATA.get(request.workflow_id, "Custom Workflow")
-        
-        # --- README.md 생성 ---
-        readme_title = request.query
-        readme_experimenter = request.experimenter
+        # --- 기본 정보 설정 ---
+        experimenter = request.experimenter
         formatted_date = get_seoul_date_string()
         
-        # 워크플로우 파일들의 링크를 미리 생성
-        workflow_links = []
-        for i, uo_id in enumerate(request.unit_operation_ids):
+        # --- 1. 워크플로우 파일 생성 로직 ---
+        
+        # 선택된 워크플로우 ID를 사용하여 이름과 파일명 생성
+        wf_id = request.workflow_id
+        wf_name = ALL_WORKFLOWS_DATA.get(wf_id, "Custom Workflow")
+        wf_description = "이 워크플로의 설명을 간략하게 작성합니다 (아래 설명은 템플릿으로 사용자 목적에 맞도록 수정합니다)"
+        
+        # 올바른 파일명 생성 (예: 001_WD070_Vector_Design.md)
+        workflow_file_name = f"001_{wf_id}_{wf_name.replace(' ', '_')}.md"
+
+        # 워크플로우 파일 내부에 들어갈 유닛 오퍼레이션 블록들을 모두 생성
+        unit_operation_blocks = []
+        for uo_id in request.unit_operation_ids:
             uo_name = ALL_UOS_DATA.get(uo_id, "Unknown Operation")
-            seq_string = str(i + 1).zfill(3)
-            # 파일명 규칙을 미리 정의 (확장 프로그램과 동일하게)
-            workflow_file_name = f"{seq_string}_{uo_id}_{uo_name.replace(' ', '_')}.md"
-            link_text = f"{seq_string} {uo_id} {uo_name}"
-            workflow_links.append(f"[ ] [{link_text}](./{workflow_file_name})")
+            unit_operation_blocks.append(create_unit_operation_template(uo_id, uo_name, experimenter))
+        
+        all_uo_blocks_content = "\n".join(unit_operation_blocks)
+
+        # 최종 워크플로우 파일 콘텐츠 조립
+        workflow_content = f"""---
+title: "{wf_id} {wf_name}"
+experimenter: "{experimenter}"
+created_date: '{formatted_date}'
+last_updated_date: '{formatted_date}'
+---
+
+## [{wf_id} {wf_name}]
+| {wf_description}
+
+## 🗂️ 관련 유닛오퍼레이션
+{all_uo_blocks_content}
+"""
+
+        # --- 2. README.md 생성 로직 ---
+
+        # README.md에는 생성된 워크플로우 파일 링크 하나만 포함
+        link_text = f"001 {wf_id} {wf_name}"
+        workflow_link = f"[ ] [{link_text}](./{workflow_file_name})"
 
         readme_content = f"""---
-title: "{readme_title}"
-experimenter: {readme_experimenter}
+title: "{request.query}"
+experimenter: "{experimenter}"
 created_date: '{formatted_date}'
 last_updated_date: '{formatted_date}'
 experiment_type: labnote
@@ -337,34 +363,15 @@ experiment_type: labnote
 ## 🎯 실험 목표
 | 이 실험의 주된 목표와 가설을 간략하게 작성합니다.
 
-## 🗂️ 관련 워크플로
-{chr(10).join(workflow_links)}
+## 🗂️ 관련 워크플로우
+{workflow_link}
 """
         
-        files_to_create = {"README.md": readme_content}
-
-        # --- 각 Unit Operation에 대한 워크플로우 .md 파일 생성 ---
-        for i, uo_id in enumerate(request.unit_operation_ids):
-            uo_name = ALL_UOS_DATA.get(uo_id, "Unknown Operation")
-            seq_string = str(i + 1).zfill(3)
-            workflow_file_name = f"{seq_string}_{uo_id}_{uo_name.replace(' ', '_')}.md"
-            
-            # 워크플로우 파일 내용 생성
-            workflow_title = f"{uo_id} {uo_name}"
-            workflow_body = f"""---
-title: "{workflow_title}"
-experimenter: {readme_experimenter}
-created_date: '{formatted_date}'
-last_updated_date: '{formatted_date}'
----
-
-## [{workflow_title}]
-> (Workflow summary will be generated here)
-
-## 🗂️ Relevant Unit Operations
-{create_unit_operation_template(uo_id, uo_name, readme_experimenter)}
-"""
-            files_to_create[workflow_file_name] = workflow_body
+        # --- 3. 최종 파일 딕셔너리 반환 ---
+        files_to_create = {
+            "README.md": readme_content,
+            workflow_file_name: workflow_content
+        }
 
         return LabNoteResponse(files=files_to_create)
 

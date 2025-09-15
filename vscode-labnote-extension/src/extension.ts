@@ -80,7 +80,7 @@ export function activate(context: vscode.ExtensionContext) {
             try {
                 const activeUri = getActiveFileUri();
                 if (!activeUri || !logic.isValidReadmePath(activeUri.fsPath)) {
-                    vscode.window.showErrorMessage("이 명령어는 'labnotes/<번호>_주제/README.md' 파일에서만 실행할 수 있습니다.");
+                    vscode.window.showErrorMessage("이 명령어는 'labnote/<번호>_주제/README.md' 파일에서만 실행할 수 있습니다.");
                     return;
                 }
                 
@@ -162,7 +162,7 @@ function createUnitOperationCommand(fsProvider: FileSystemProvider, uoFilePath: 
     return async () => {
         const activeUri = getActiveFileUri();
         if (!activeUri || !logic.isValidWorkflowPath(activeUri.fsPath)) {
-            vscode.window.showErrorMessage("이 명령어는 'labnotes' 실험 폴더 내의 워크플로 파일에서만 실행할 수 있습니다.");
+            vscode.window.showErrorMessage("이 명령어는 'labnote' 실험 폴더 내의 워크플로 파일에서만 실행할 수 있습니다.");
             return;
         }
 
@@ -213,18 +213,18 @@ async function interactiveGenerateFlow(userInput: string, outputChannel: vscode.
                 return;
             }
             const rootPath = workspaceFolders[0].uri.fsPath;
-            const labnotesRoot = path.join(rootPath, 'labnotes');
+            const labnoteRoot = path.join(rootPath, 'labnote');
 
-            if (!fs.existsSync(labnotesRoot)) fs.mkdirSync(labnotesRoot);
+            if (!fs.existsSync(labnoteRoot)) fs.mkdirSync(labnoteRoot);
 
-            const entries = fs.readdirSync(labnotesRoot, { withFileTypes: true });
+            const entries = fs.readdirSync(labnoteRoot, { withFileTypes: true });
             const existingDirs = entries.filter(e => e.isDirectory() && /^\d{3}_/.test(e.name)).map(e => parseInt(e.name.substring(0, 3), 10));
             
             const nextId = existingDirs.length > 0 ? Math.max(...existingDirs) + 1 : 1;
             const formattedId = nextId.toString().padStart(3, '0');
             const safeTitle = userInput.replace(/\s+/g, '_');
             const newDirName = `${formattedId}_${safeTitle}`;
-            const newDirPath = path.join(labnotesRoot, newDirName);
+            const newDirPath = path.join(labnoteRoot, newDirName);
 
             fs.mkdirSync(newDirPath, { recursive: true });
             fs.mkdirSync(path.join(newDirPath, 'images'), { recursive: true });
