@@ -153,10 +153,6 @@
 
 ### 예시
 * **실험노트 생성**
-![alt text](images/image-1.png)
-
-* **질문 답변**
-### 시연 영상 (MP4)
 <video src="images/시연예시.mp4" controls="controls" muted="muted" loop="loop" playsinline="playsinline" style="max-width: 100%;">
 </video>
 
