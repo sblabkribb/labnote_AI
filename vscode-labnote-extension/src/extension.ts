@@ -119,8 +119,13 @@ async function populateSectionFlow(extensionContext: vscode.ExtensionContext, ou
                         }
 
                         const chosenTextWithAttribution = populateData.options[chosenIndex];
-                        // ✨ 수정된 부분: 참고 SOP 정보 제거
-                        const chosenText = chosenTextWithAttribution.replace(/\[참고 SOP:.*?\]\s*\n\n/, '');
+                        // 모델명 및 참고 SOP 정보 제거
+                        let chosenText = chosenTextWithAttribution;
+                        // 모델명 헤더 제거
+                        chosenText = chosenText.replace(/^---\s*.*의 제안\s*---\s*\n\n/, ''); 
+                        // 참고 SOP 정보 제거
+                        chosenText = chosenText.replace(/\[참고 SOP:.*?\]\s*$/, '').trim(); 
+                        
                         const rejectedOptions = populateData.options.filter((_, index) => index !== chosenIndex);
 
                         await editor.edit(editBuilder => {
