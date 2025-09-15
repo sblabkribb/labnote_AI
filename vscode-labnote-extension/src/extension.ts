@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as path from 'path';
 
 const fetch = require('node-fetch');
 
@@ -292,6 +294,40 @@ async function interactiveGenerateFlow(userInput: string, outputChannel: vscode.
         cancellable: true
     }, async (progress, token) => {
         try {
+            // --- 파일 및 폴더 생성 로직 ---
+            
+            const workspaceFolders = vscode.workspace.workspaceFolders;
+            if (!workspaceFolders) {
+                vscode.window.showErrorMessage("실험 노트를 생성하려면 먼저 작업 영역(workspace)을 열어주세요.");
+                return;
+            }
+            const rootPath = workspaceFolders[0].uri.fsPath;
+            const labnotesRoot = path.join(rootPath, 'labnotes'); // 'labnotes' 폴더를 기준으로 설정
+
+            // 1. 'labnotes' 폴더가 없으면 생성
+            if (!fs.existsSync(labnotesRoot)) {
+                fs.mkdirSync(labnotesRoot);
+            }
+
+            // 2. 다음 실험 번호 계산
+            const entries = fs.readdirSync(labnotesRoot, { withFileTypes: true });
+            const existingDirs = entries
+                .filter(e => e.isDirectory() && /^\d{3}_/.test(e.name))
+                .map(e => parseInt(e.name.substring(0, 3), 10));
+            
+            const nextId = existingDirs.length > 0 ? Math.max(...existingDirs) + 1 : 1;
+            const formattedId = nextId.toString().padStart(3, '0');
+            const safeTitle = userInput.replace(/\s+/g, '_');
+            const newDirName = `${formattedId}_${safeTitle}`;
+            const newDirPath = path.join(labnotesRoot, newDirName);
+
+            // 3. 번호가 매겨진 새 폴더 및 하위 폴더 생성
+            fs.mkdirSync(newDirPath, { recursive: true });
+            fs.mkdirSync(path.join(newDirPath, 'images'), { recursive: true });
+            fs.mkdirSync(path.join(newDirPath, 'resources'), { recursive: true });
+
+            outputChannel.appendLine(`[Info] Created new experiment folder: ${newDirPath}`);
+
             progress.report({ increment: 10, message: "실험 구조를 분석하고 추천받는 중..." });
             const config = vscode.workspace.getConfiguration('labnote.ai');
             const baseUrl = config.get<string>('backendUrl');
@@ -318,9 +354,13 @@ async function interactiveGenerateFlow(userInput: string, outputChannel: vscode.
             const scaffoldData = await createScaffoldResponse.json() as LabNoteResponse;
 
             progress.report({ increment: 90, message: "결과 표시 중..." });
-            const doc = await vscode.workspace.openTextDocument({ content: scaffoldData.response, language: 'markdown' });
-            await vscode.window.showTextDocument(doc, { preview: false });
+            
+            // --- 생성된 내용을 새 폴더 안의 파일에 저장하고 열기 ---
+            const newFilePath = path.join(newDirPath, 'README.md');
+            fs.writeFileSync(newFilePath, scaffoldData.response);
 
+            const doc = await vscode.workspace.openTextDocument(newFilePath);
+            await vscode.window.showTextDocument(doc, { preview: false });
             outputChannel.appendLine(`[Success] 랩노트 생성이 완료되었습니다.`);
             outputChannel.show(true);
 
