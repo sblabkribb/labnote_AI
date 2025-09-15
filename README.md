@@ -152,11 +152,7 @@
   * **설명:** 실험 프로토콜이나 관련 지식에 대해 AI에게 자유롭게 질문하고 답변을 받습니다.
 
 ### 예시
-* **실험노트 생성**
-<video width="640" height="360" controls>
-  <source src="/images/시연예시.mp4" type="video/mp4">
-  Your browser does not support the video tag.
-</video>
+[시연 영상 보기](https://youtu.be/syWqqiyTmsE)
 
 -----
 
