@@ -73,6 +73,15 @@
       }
     }
   },
+  "configurationDefaults": {
+      "[markdown]": {
+        "markdown.copyFiles.destination": {
+          "**/*.{png,jpg,jpeg,gif,svg,webp}": "images/",
+          "**/*": "resources/"
+        },
+        "markdown.updateLinksOnFileMove.enabled": "prompt"
+      }
+    },
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./ && node ./copy-resources.js",
