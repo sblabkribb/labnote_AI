@@ -8,7 +8,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments
 from trl import DPOTrainer
 
 # --- 초기 설정 ---
-load_dotenv(dotenv_path='../.env')
+# .env 파일이 스크립트와 동일한 디렉토리에 있으므로 경로를 수정합니다.
+load_dotenv(dotenv_path='.env')
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
