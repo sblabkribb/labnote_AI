@@ -61,7 +61,7 @@
       "properties": {
         "labnote.ai.backendUrl": {
           "type": "string",
-          "default": "http://123.37.6.117:30469",
+          "default": "http://123.37.5.184:31269",
           "description": "The base URL of the LabNote AI backend server (e.g., https://...vessl.ai)."
         },
         "labnote.manager.workflowsPath": {
