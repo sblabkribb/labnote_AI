@@ -2,7 +2,7 @@
   "name": "labnote-ai-assistant",
   "displayName": "LabNote AI Assistant",
   "description": "An AI assistant to help with writing lab notes in VS Code.",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "publisher": "BiofoundryLabs",
   "engines": {
     "vscode": "^1.85.0"
@@ -18,7 +18,8 @@
     "onCommand:labnote.manager.manageTemplates",
     "onCommand:labnote.ai.populateSection",
     "onCommand:labnote.ai.chat",
-    "onCommand:labnote.manager.insertTable"
+    "onCommand:labnote.manager.insertTable",
+    "onCommand:labnote.manager.reorderWorkflows"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -54,6 +55,10 @@
       {
         "command": "labnote.manager.insertTable",
         "title": "LabNote: 표 삽입"
+      },
+      {
+        "command": "labnote.manager.reorderWorkflows",
+        "title": "LabNote: 워크플로우 번호 재정렬"
       }
     ],
     "configuration": {
@@ -61,8 +66,8 @@
       "properties": {
         "labnote.ai.backendUrl": {
           "type": "string",
-          "default": "http://123.37.5.184:31269",
-          "description": "The base URL of the LabNote AI backend server (e.g., https://...vessl.ai)."
+          "default": "http://127.0.0.1:8000",
+          "description": "The base URL of the LabNote AI backend server (e.g., http://127.0.0.1:8000)."
         },
         "labnote.manager.workflowsPath": {
           "type": "string",
@@ -85,10 +90,10 @@
   "configurationDefaults": {
     "[markdown]": {
       "markdown.copyFiles.destination": {
-        "**/*.{png,jpg,jpeg,gif,svg,webp}": "images/",
-        "**/*": "resources/"
+        "**/*.{png,jpg,jpeg,gif,svg,webp}": "images/${documentBaseName.substring(0, 3)}/",
+        "**/*": "resources/${documentBaseName.substring(0, 3)}/"
       },
-      "markdown.updateLinksOnFileMove.enabled": "prompt"
+      "markdown.updateLinksOnFileMove.enabled": "always"
     }
   },
   "scripts": {

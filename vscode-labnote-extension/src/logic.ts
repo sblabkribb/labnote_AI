@@ -1,6 +1,6 @@
 import * as yaml from 'js-yaml';
 import * as path from 'path';
-import { FileSystemProvider, FsDirent } from './fileSystemProvider'; // Corrected import
+import { FileSystemProvider, FsDirent } from './fileSystemProvider';
 
 // 모듈 레벨 변수로 defaultExperimenter 관리
 let defaultExperimenter: string = '';
@@ -67,14 +67,27 @@ function getFormattedDate(date: Date): string {
     return getSeoulDateString(date);
 }
 
-function getNextExperimentNumber(existingDirs: string[]): number {
-    if (existingDirs.length === 0) return 1;
-    const latestId = existingDirs
-        .map(dir => parseInt(dir.substring(0, 3), 10))
+/**
+ * 디렉토리 내의 'XXX_' 형태의 파일/폴더 번호를 분석하여
+ * 사용 가능한 다음 번호를 찾아 반환합니다. (예: 001, 003이 있으면 002 반환)
+ */
+function getNextAvailableIndex(existingItems: string[]): number {
+    const existingIndexes = existingItems
+        .map(item => parseInt(item.substring(0, 3), 10))
         .filter(num => !isNaN(num))
-        .sort((a, b) => b - a)[0];
-    return (latestId || 0) + 1;
+        .sort((a, b) => a - b);
+
+    let nextIndex = 1;
+    for (const index of existingIndexes) {
+        if (index === nextIndex) {
+            nextIndex++;
+        } else {
+            break;
+        }
+    }
+    return nextIndex;
 }
+
 
 export function createNewLabnote(provider: FileSystemProvider, workspaceRoot: string, experimentTitle: string) {
     if (!experimentTitle) {
@@ -85,15 +98,15 @@ export function createNewLabnote(provider: FileSystemProvider, workspaceRoot: st
 
     const entries = provider.readDir(labnoteRoot);
     const existingDirs = entries.filter(e => e.isDirectory() && /^\d{3}_/.test(e.name)).map(e => e.name);
-    
-    const nextId = getNextExperimentNumber(existingDirs);
+
+    const nextId = getNextAvailableIndex(existingDirs);
     const formattedId = nextId.toString().padStart(3, '0');
     const safeTitle = experimentTitle.replace(/\s+/g, '_');
     const newDirName = `${formattedId}_${safeTitle}`;
     const newDirPath = path.join(labnoteRoot, newDirName);
 
     provider.mkdir(path.join(newDirPath, 'images'));
-    provider.mkdir(path.join(newDirPath, 'resource'));
+    provider.mkdir(path.join(newDirPath, 'resources'));
 
     const formattedDate = getFormattedDate(new Date());
     const readmeFrontMatter: ReadmeFrontMatter = {
@@ -103,7 +116,7 @@ export function createNewLabnote(provider: FileSystemProvider, workspaceRoot: st
         created_date: formattedDate,
         last_updated_date: formattedDate,
     };
-    
+
     const yamlText = yaml.dump(readmeFrontMatter, { sortKeys: false, lineWidth: -1 });
     const readmeContent = `---\n${yamlText}---\n\n## 🎯 실험 목표\n| 이 실험의 주된 목표와 가설을 간략하게 작성합니다.\n\n## 🗂️ 관련 워크플로\n\n| 아래 표시 사이에 관련된 워크플로 파일 목록을 입력합니다.\n| \`F1\`, \`New workflow\` 명령 수행시 해당 목록은 표시된 위치 사이에 자동 추가됩니다.\n| 위 YAML 블록의 author: 항목에 입력된 이름은 워크플로와 유닛오퍼레이션 생성시 실험자 이름으로 자동 입력됩니다.\n\n\n\n\n\n`;
 
@@ -122,24 +135,14 @@ export function createNewWorkflow(provider: FileSystemProvider, readmePath: stri
     const today = new Date();
     const safeName = selectedWorkflow.name.replace(/\s+/g, '_');
     const safeDescription = description.replace(/\s+/g, '_');
-
     const currentDir = path.dirname(readmePath);
 
-    // Determine next 3-digit sequence by scanning existing workflow files
-    let nextSeq = 1;
-    try {
-        const entries = provider.readDir(currentDir);
-        const existingSeqs = entries
-            .filter((e: FsDirent) => !e.isDirectory() && /^\d{3}_.+\.md$/i.test(e.name)) // Added type
-            .map((e: FsDirent) => parseInt(e.name.substring(0, 3), 10)) // Added type
-            .filter((n: number) => !isNaN(n)); // Added type
-        if (existingSeqs.length > 0) {
-            nextSeq = Math.max(...existingSeqs) + 1;
-        }
-    } catch {
-        nextSeq = 1;
-    }
-
+    const entries = provider.readDir(currentDir);
+    const existingWfFiles = entries
+        .filter((e: FsDirent) => !e.isDirectory() && /^\d{3}_.+\.md$/i.test(e.name))
+        .map((e: FsDirent) => e.name);
+        
+    const nextSeq = getNextAvailableIndex(existingWfFiles);
     const seqString = String(nextSeq).padStart(3, '0');
     const workflowFileName = `${seqString}_${selectedWorkflow.id}_${safeName}${description ? '--' + safeDescription : ''}.md`;
     const workflowFilePath = path.join(currentDir, workflowFileName);
@@ -158,7 +161,7 @@ export function createNewWorkflow(provider: FileSystemProvider, readmePath: stri
 
     const linkText = `${seqString} ${selectedWorkflow.id} ${selectedWorkflow.name}${description ? ' - ' + description : ''}`;
     const textToInsert = `[ ] [${linkText}](./${workflowFileName})\n`;
-    
+
     return { workflowFilePath, textToInsert };
 }
 
@@ -218,22 +221,23 @@ export function parseWorkflows(content: string): ParsedWorkflow[] {
 export function createWorkflowFileContent(workflow: ParsedWorkflow, userDescription: string, date: Date, experimenter: string): string {
     const formattedDate = getFormattedDate(date);
     const title = `${workflow.id} ${workflow.name}${userDescription ? ` - ${userDescription}` : ''}`;
-    
+
     const frontMatter: WorkflowFrontMatter = {
         title: title,
         experimenter: experimenter,
         created_date: formattedDate,
         last_updated_date: formattedDate
     };
-    
+
     const yamlText = yaml.dump(frontMatter, { sortKeys: false, lineWidth: -1 });
-    
+
     const bodyTitle = `## [${workflow.id} ${workflow.name}]${userDescription ? ` ${userDescription}` : ''}`;
     const bodyDescription = `| 이 워크플로의 설명을 간략하게 작성합니다 (아래 설명은 템플릿으로 사용자 목적에 맞도록 수정합니다)\n| ${workflow.description}`;
-    const unitOperationSection = `## 🗂️ 관련 유닛오퍼레이션\n| 관련된 유닛오퍼레이션 목록을 아래 표시 사이에 입력합니다.\n| \`F1\`, \`New HW/SW Unit Operation\` 명령 수행시 해당 목록은 표시된 위치 사이에 자동 추가됩니다.\n\n\n\n\n\n\n`;
+    const unitOperationSection = `## 🗂️ 관련 유닛오퍼레이션\n| 관련된 유닛오퍼레이션 목록을 아래 표시 사이에 입력합니다.\n| \`F1\`, \`New HW/SW Unit Operation\` 명령 수행시 해당 목록은 표시된 위치 사이에 자동 추가됩니다.\n\n\n\n\n`;
 
     return `---\n${yamlText}---\n\n${bodyTitle}\n${bodyDescription}\n\n${unitOperationSection}\n`;
 }
+
 
 export function parseWorkflowFrontMatter(fileContent: string): WorkflowFrontMatter | null {
     const match = fileContent.match(/^---([\s\S]+?)---/);
@@ -283,7 +287,7 @@ export function parseUnitOperations(content: string): ParsedUnitOperation[] {
         if (nameMatch) {
             const id = nameMatch[1];
             const name = nameMatch[2].trim();
-            
+
             let software = '';
             if (i + 1 < lines.length) {
                 const softwareMatch = lines[i + 1].match(/^\s+-\s+\*\*Software\*\*:\s*(.*)/);
@@ -300,12 +304,12 @@ export function parseUnitOperations(content: string): ParsedUnitOperation[] {
                 }
             }
 
-            unitOperations.push({ 
-                id, 
-                name, 
+            unitOperations.push({
+                id,
+                name,
                 software,
-                description, 
-                label: `${id}: ${name}` 
+                description,
+                label: `${id}: ${name}`
             });
         }
     }
