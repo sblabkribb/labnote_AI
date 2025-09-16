@@ -19,7 +19,8 @@
     "onCommand:labnote.ai.populateSection",
     "onCommand:labnote.ai.chat",
     "onCommand:labnote.manager.insertTable",
-    "onCommand:labnote.manager.reorderWorkflows"
+    "onCommand:labnote.manager.reorderWorkflows",
+    "onCommand:labnote.manager.reorderLabnotes"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -59,6 +60,10 @@
       {
         "command": "labnote.manager.reorderWorkflows",
         "title": "LabNote: 워크플로우 번호 재정렬"
+      },
+      {
+        "command": "labnote.manager.reorderLabnotes",
+        "title": "LabNote: 실험 폴더 번호 재정렬"
       }
     ],
     "configuration": {

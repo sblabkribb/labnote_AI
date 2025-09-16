@@ -214,6 +214,15 @@ export function activate(context: vscode.ExtensionContext) {
                 return;
             }
             await reorderWorkflowFiles(activeUri.fsPath);
+        }),
+        vscode.commands.registerCommand('labnote.manager.reorderLabnotes', async () => {
+            const workspaceFolders = vscode.workspace.workspaceFolders;
+            if (!workspaceFolders) {
+                vscode.window.showErrorMessage("작업 영역(workspace)이 열려 있어야 합니다.");
+                return;
+            }
+            const labnoteRoot = path.join(workspaceFolders[0].uri.fsPath, 'labnote');
+            await reorderLabnoteFolders(labnoteRoot);
         })
     );
 }
@@ -221,6 +230,83 @@ export function activate(context: vscode.ExtensionContext) {
 export function deactivate() {}
 
 // --- Helper Functions ---
+
+// --- 실험 폴더 재정렬 로직 ---
+async function reorderLabnoteFolders(labnoteRoot: string) {
+    await vscode.window.withProgress({
+        location: vscode.ProgressLocation.Notification,
+        title: "실험 폴더 번호 재정렬 중...",
+        cancellable: false
+    }, async (progress) => {
+        try {
+            if (!fs.existsSync(labnoteRoot)) {
+                vscode.window.showInformationMessage("'labnote' 폴더를 찾을 수 없습니다.");
+                return;
+            }
+            const entries = fs.readdirSync(labnoteRoot, { withFileTypes: true });
+            const labnoteDirs = entries
+                .filter(e => e.isDirectory() && /^\d{3}_/.test(e.name))
+                .map(e => e.name)
+                .sort();
+
+            if (labnoteDirs.length === 0) {
+                vscode.window.showInformationMessage("재정렬할 실험 폴더가 없습니다.");
+                return;
+            }
+
+            progress.report({ increment: 10, message: "폴더 목록 분석 중..." });
+
+            const renames: { oldPath: string, newPath: string }[] = [];
+            let needsReordering = false;
+
+            for (let i = 0; i < labnoteDirs.length; i++) {
+                const newIndex = i + 1;
+                const newPrefix = String(newIndex).padStart(3, '0');
+                const oldDirName = labnoteDirs[i];
+                const oldPrefix = oldDirName.substring(0, 3);
+
+                if (oldPrefix !== newPrefix) {
+                    needsReordering = true;
+                    const restOfDirName = oldDirName.substring(4);
+                    const newDirName = `${newPrefix}_${restOfDirName}`;
+                    renames.push({
+                        oldPath: path.join(labnoteRoot, oldDirName),
+                        newPath: path.join(labnoteRoot, newDirName)
+                    });
+                }
+            }
+
+            if (!needsReordering) {
+                vscode.window.showInformationMessage("실험 폴더 번호가 이미 순서대로 정렬되어 있습니다.");
+                return;
+            }
+
+            progress.report({ increment: 30, message: "이름 변경 계획 수립 중..." });
+
+            const edit = new vscode.WorkspaceEdit();
+
+            // 임시 이름으로 먼저 변경 (이름 충돌 방지)
+            for (const r of renames) {
+                edit.renameFile(vscode.Uri.file(r.oldPath), vscode.Uri.file(r.newPath + '.tmp'), { overwrite: true });
+            }
+            await vscode.workspace.applyEdit(edit);
+
+            // 최종 이름으로 변경
+            const finalEdit = new vscode.WorkspaceEdit();
+            for (const r of renames) {
+                finalEdit.renameFile(vscode.Uri.file(r.newPath + '.tmp'), vscode.Uri.file(r.newPath), { overwrite: true });
+            }
+            await vscode.workspace.applyEdit(finalEdit);
+
+            progress.report({ increment: 100 });
+            vscode.window.showInformationMessage("실험 폴더 번호 재정렬이 완료되었습니다.");
+
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`실험 폴더 재정렬 중 오류 발생: ${error.message}`);
+        }
+    });
+}
+
 
 function getActiveFileUri(): vscode.Uri | null {
     const editor = vscode.window.activeTextEditor;
