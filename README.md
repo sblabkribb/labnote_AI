@@ -169,7 +169,7 @@ LabNote AI는 여러분의 실험 SOP(`sops` 폴더 내 `.md` 파일)를 학습�
 ### 예시
 
 아래 이미지를 클릭하면 유튜브 영상으로 이동합니다.
-[](https://youtu.be/syWqqiyTmsE)
+[![시연 영상 보기](images/썸.jpg)](https://youtu.be/syWqqiyTmsE)
 클릭시 유튜브에서 영상 재생
 
 -----
