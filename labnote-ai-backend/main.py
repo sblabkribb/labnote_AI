@@ -191,7 +191,6 @@ UNIT_OPERATION_GUIDE_DATA = """
 - USW340: Computation (일반적인 데이터 수집, 전처리, 분석 과정)
 """
 
-# 정규식에서 불필요한 `**` 부분을 제거합니다.
 def _precompute_data():
     logger.info("Pre-computing static data (ALL_UOS, ALL_WORKFLOWS)...")
     all_uos = {m.group(1): m.group(2).strip() for m in re.finditer(r'- ([A-Z]{2,3}\d{3}): (.*)', UNIT_OPERATION_GUIDE_DATA)}
@@ -220,8 +219,8 @@ async def lifespan(app: FastAPI):
 # FastAPI 앱 초기화
 app = FastAPI(
     title="LabNote AI Assistant Backend",
-    version="2.4.1",
-    description="Interactive lab note generation with DPO feedback loop and performance optimizations.",
+    version="2.5.0",
+    description="Interactive lab note generation with user-edit DPO feedback loop and consent management.",
     lifespan=lifespan
 )
 
@@ -249,13 +248,16 @@ class PopulateNoteResponse(BaseModel):
     section: str
     options: List[str]
 
+# ⭐️ 변경점: 사용자 수정본을 받기 위한 모델 수정
 class PreferenceRequest(BaseModel):
     uo_id: str
     section: str
-    chosen: str
+    chosen_original: str  # AI가 제안하고 사용자가 선택한 원본
+    chosen_edited: str    # 사용자가 최종 수정한 버전
     rejected: List[str]
     query: str
     file_content: str
+
 
 class ChatRequest(BaseModel):
     query: str
@@ -404,9 +406,10 @@ async def populate_note(request: PopulateNoteRequest):
         logger.error(f"Error populating note: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error populating note: {e}")
 
+# ⭐️ 변경점: 사용자 수정본을 학습 데이터로 저장하는 로직
 @app.post("/record_preference", status_code=204)
 async def record_preference(request: PreferenceRequest):
-    logger.info(f"Phase 3: Recording preference for UO '{request.uo_id}' - Section '{request.section}'")
+    logger.info(f"Phase 3: Recording USER EDITED preference for UO '{request.uo_id}' - Section '{request.section}'")
     r = redis.Redis(connection_pool=redis_pool)
     try:
         await r.ping()
@@ -425,19 +428,23 @@ async def record_preference(request: PreferenceRequest):
             f"- Overall Goal: {request.query}\n"
             f"- Starting Materials (Input): {input_context}\n"
             f"- Desired End-Product (Output): {output_context}\n"
+            # AI에게 원본 제안을 제공하여, 수정된 내용과의 차이를 이해하도록 돕습니다.
+            f"- The initial AI suggestion was: {request.chosen_original}" 
         )
         
+        # ⭐️ 핵심 변경: 'chosen'에 사용자의 최종 수정본을, 'rejected'에 AI의 원본 제안을 추가
         preference_data = {
             "prompt": prompt,
-            "chosen": request.chosen,
-            "rejected": request.rejected
+            "chosen": request.chosen_edited, # 사용자의 수정본이 '긍정' 샘플이 됨
+            # AI의 원본 제안도 '부정' 샘플에 추가하여, 단순 선택이 아닌 '개선'되었음을 명확히 함
+            "rejected": [request.chosen_original] + request.rejected 
         }
 
         key = f"dpo:preference:{uuid.uuid4()}"
         # JSON 직렬화로 안전하게 저장
         await r.set(key, json.dumps(preference_data, ensure_ascii=False))
         
-        logger.info(f"Successfully recorded preference data to Redis with key: {key}")
+        logger.info(f"Successfully recorded user-edited preference to Redis with key: {key}")
 
     except redis.exceptions.ConnectionError as e:
         logger.error(f"Redis connection error: {e}", exc_info=True)
@@ -445,8 +452,9 @@ async def record_preference(request: PreferenceRequest):
     except Exception as e:
         logger.error(f"Error recording preference: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred while recording preference.")
-    # 명시적으로 아무것도 반환하지 않음 → 204 No Content
+    
     return
+
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):

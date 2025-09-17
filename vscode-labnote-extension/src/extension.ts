@@ -558,7 +558,26 @@ async function interactiveGenerateFlow(userInput: string, outputChannel: vscode.
     });
 }
 
+// ⭐️ 변경점: 약관 동의 및 새로운 Webview 플로우 적용
 async function populateSectionFlow(extensionContext: vscode.ExtensionContext, outputChannel: vscode.OutputChannel) {
+    // 1. 약관 동의 확인
+    const consent = extensionContext.globalState.get('labnoteAiConsent');
+    if (consent !== 'given') {
+        const selection = await vscode.window.showInformationMessage(
+            'LabNote AI 성능 향상을 위해, 사용자가 선택하고 수정한 내용을 익명화하여 모델 학습에 사용합니다. 이에 동의하십니까? 자세한 내용은 프로젝트 README의 "데이터 활용 및 저작권 정책"을 참고해주세요.',
+            { modal: true },
+            '동의', '거부'
+        );
+
+        if (selection === '동의') {
+            await extensionContext.globalState.update('labnoteAiConsent', 'given');
+        } else {
+            await extensionContext.globalState.update('labnoteAiConsent', 'denied');
+            vscode.window.showInformationMessage("AI 기능 사용에 동의하지 않으셨습니다. '섹션 내용 채우기' 기능은 비활성화됩니다.");
+            return;
+        }
+    }
+    
     const editor = vscode.window.activeTextEditor;
     if (!editor) {
         vscode.window.showWarningMessage("활성화된 에디터가 없습니다.");
@@ -605,38 +624,35 @@ async function populateSectionFlow(extensionContext: vscode.ExtensionContext, ou
 
             panel.webview.onDidReceiveMessage(
                 async message => {
-                    if (message.command === 'applyOption') {
-                        const chosenIndex = parseInt(message.index, 10);
-                        if (isNaN(chosenIndex) || chosenIndex < 0 || chosenIndex >= populateData.options.length) {
-                            vscode.window.showErrorMessage("잘못된 선택입니다.");
-                            return;
-                        }
+                    if (message.command === 'applyAndLearn') {
+                        const { chosen_original, chosen_edited } = message;
+                        
+                        // 사용자가 선택하지 않은 나머지 옵션들을 'rejected'로 구성
+                        const rejectedOptions = populateData.options.filter(opt => opt !== chosen_original);
 
-                        const chosenTextWithAttribution = populateData.options[chosenIndex];
-                        let chosenText = chosenTextWithAttribution.replace(/^---\s*.*의 제안\s*---\s*\n\n/, '').replace(/\[참고 SOP:.*?\]\s*$/, '').trim();
-
-                        const rejectedOptions = populateData.options.filter((_, index) => index !== chosenIndex);
-
+                        // 1. 에디터에 수정된 내용 적용
                         await editor.edit(editBuilder => {
-                            editBuilder.replace(placeholderRange, chosenText);
+                            editBuilder.replace(placeholderRange, chosen_edited);
                         });
 
+                        // 2. DPO 데이터 전송
                         fetch(`${baseUrl}/record_preference`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
                                 uo_id: uoId,
                                 section,
-                                chosen: chosenText,
+                                chosen_original,
+                                chosen_edited,
                                 rejected: rejectedOptions,
                                 query,
-                                file_content: editor.document.getText()
+                                file_content: editor.document.getText() 
                             })
                         }).catch((err: any) => {
                             outputChannel.appendLine(`[WARN] DPO 데이터 기록 실패: ${err.message}`);
                         });
 
-                        vscode.window.showInformationMessage(`'${section}' 섹션이 업데이트되었습니다.`);
+                        vscode.window.showInformationMessage(`'${section}' 섹션이 업데이트되었고, AI가 사용자의 수정을 학습합니다.`);
                         panel.dispose();
                     }
                 },
@@ -688,16 +704,31 @@ async function callChatApi(userInput: string, outputChannel: vscode.OutputChanne
 }
 // --- Webview and Context Finding Functions ---
 
+// ⭐️ 변경점: 수정 기능을 포함하는 새로운 Webview HTML 생성
 function createPopulateWebviewPanel(section: string, options: string[]): vscode.WebviewPanel {
-    const panel = vscode.window.createWebviewPanel('labnoteAiPopulate', `AI 제안: ${section}`, vscode.ViewColumn.Beside, { enableScripts: true });
+    const panel = vscode.window.createWebviewPanel(
+        'labnoteAiPopulate', 
+        `AI 제안: ${section}`, 
+        vscode.ViewColumn.Beside, 
+        { 
+            enableScripts: true,
+            // Webview가 닫혀도 상태를 유지하도록 설정
+            retainContextWhenHidden: true 
+        }
+    );
     panel.webview.html = getWebviewContent(section, options);
     return panel;
 }
 
+// ⭐️ 변경점: Webview 콘텐츠를 수정 기능에 맞게 대폭 수정
 function getWebviewContent(section: string, options: string[]): string {
     const optionCards = options.map((option, index) => {
-        const escapedOption = option.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
-        return `<div class="option-card" data-index="${index}"><pre><code>${escapedOption}</code></pre></div>`;
+        // HTML 렌더링을 위해 특수 문자를 이스케이프하고, 내용을 base64로 인코딩하여 데이터 속성에 저장
+        const escapedOption = option.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const encodedOption = Buffer.from(option).toString('base64');
+        return `<div class="option-card" data-index="${index}" data-original-content="${encodedOption}">
+                    <pre><code>${escapedOption}</code></pre>
+                </div>`;
     }).join('');
 
     return `<!DOCTYPE html>
@@ -706,37 +737,63 @@ function getWebviewContent(section: string, options: string[]): string {
         <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>AI 제안: ${section}</title>
         <style>
-            body { font-family: sans-serif; padding: 1em; }
-            .option-card { border: 1px solid #555; border-radius: 5px; padding: 1em; margin-bottom: 1em; cursor: pointer; transition: all 0.2s ease-in-out; }
-            .option-card:hover { border-color: #007acc; transform: translateY(-2px); }
-            .option-card.selected { border: 2px solid #007acc; box-shadow: 0 0 8px #007acc66; }
-            pre { white-space: pre-wrap; word-wrap: break-word; background-color: #2e2e2e; padding: 10px; border-radius: 4px; }
-            button { padding: 10px 15px; border: none; background-color: #007acc; color: white; border-radius: 5px; cursor: pointer; font-size: 1em; width: 100%; margin-top: 1em; }
-            button:hover { background-color: #005a99; }
-            button:disabled { background-color: #555; cursor: not-allowed; }
+            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; padding: 1em; color: var(--vscode-editor-foreground); background-color: var(--vscode-editor-background); }
+            h1, p { text-align: center; }
+            #options-container { margin-bottom: 2em; }
+            .option-card { border: 1px solid var(--vscode-editorWidget-border, #454545); border-radius: 5px; padding: 1em; margin-bottom: 1em; cursor: pointer; transition: all 0.2s ease-in-out; }
+            .option-card:hover { border-color: var(--vscode-focusBorder, #007ACC); }
+            .option-card.selected { border: 2px solid var(--vscode-focusBorder, #007ACC); box-shadow: 0 0 8px var(--vscode-focusBorder, #007ACC)66; }
+            pre { white-space: pre-wrap; word-wrap: break-word; background-color: var(--vscode-editor-background); padding: 10px; border-radius: 4px; }
+            #editor-section { display: none; }
+            textarea { width: 100%; height: 250px; box-sizing: border-box; background-color: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border); border-radius: 5px; padding: 10px; font-family: var(--vscode-editor-font-family); font-size: var(--vscode-editor-font-size); }
+            button { padding: 10px 15px; border: none; background-color: var(--vscode-button-background, #0E639C); color: var(--vscode-button-foreground, #FFFFFF); border-radius: 5px; cursor: pointer; font-size: 1em; width: 100%; margin-top: 1em; }
+            button:hover { background-color: var(--vscode-button-hoverBackground, #1177BB); }
         </style>
     </head>
     <body>
         <h1>"${section}" 섹션에 대한 AI 제안</h1>
-        <p>삽입할 내용을 선택하고 '선택 항목 적용' 버튼을 클릭하세요.</p>
+        <p>1. 아래 제안 중 하나를 선택한 후, 2. 필요시 내용을 수정하고, 3. '적용 및 AI 학습' 버튼을 누르세요.</p>
+        
         <div id="options-container">${optionCards}</div>
-        <button id="apply-btn" disabled>선택 항목 적용</button>
+
+        <div id="editor-section">
+            <h2>수정 창</h2>
+            <textarea id="editor-textarea"></textarea>
+            <button id="apply-btn">적용 및 AI 학습</button>
+        </div>
+
         <script>
             const vscode = acquireVsCodeApi();
             const cards = document.querySelectorAll('.option-card');
+            const editorSection = document.getElementById('editor-section');
+            const editorTextarea = document.getElementById('editor-textarea');
             const applyBtn = document.getElementById('apply-btn');
-            let selectedCard = null;
+            
+            let selectedOriginalContent = '';
+
             cards.forEach(card => {
                 card.addEventListener('click', () => {
+                    // 이전에 선택된 카드 스타일 초기화
                     cards.forEach(c => c.classList.remove('selected'));
                     card.classList.add('selected');
-                    selectedCard = card;
-                    applyBtn.disabled = false;
+
+                    // base64로 인코딩된 원본 내용을 디코딩하여 textarea에 설정
+                    selectedOriginalContent = atob(card.dataset.originalContent);
+                    editorTextarea.value = selectedOriginalContent;
+                    
+                    // 수정 창 표시
+                    editorSection.style.display = 'block';
                 });
             });
+
             applyBtn.addEventListener('click', () => {
-                if (selectedCard) {
-                    vscode.postMessage({ command: 'applyOption', index: selectedCard.dataset.index });
+                const editedContent = editorTextarea.value;
+                if (selectedOriginalContent) {
+                    vscode.postMessage({ 
+                        command: 'applyAndLearn', 
+                        chosen_original: selectedOriginalContent,
+                        chosen_edited: editedContent
+                    });
                 }
             });
         </script>
